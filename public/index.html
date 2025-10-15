@@ -1,0 +1,2434 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ቤት ለቤት ገበያ (Bet Le Bet Gebeya) - Live</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css"
+    />
+    <style>
+      body {
+        font-family: "Inter", sans-serif;
+        background-color: #f8fafc;
+      }
+      ::-webkit-scrollbar {
+        width: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #f1f1f1;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #047857;
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #f59e0b;
+      }
+      .line-clamp-2 {
+        overflow: hidden;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+      }
+      .modal-enter {
+        opacity: 0;
+        transform: scale(0.95);
+      }
+      .modal-enter-active {
+        transition: opacity 0.3s ease, transform 0.3s ease;
+      }
+      .modal-exit-active {
+        opacity: 0;
+        transform: scale(0.95);
+        transition: opacity 0.3s ease, transform 0.3s ease;
+      }
+      .tab-active {
+        border-color: #f59e0b;
+        color: #047857;
+        background-color: white;
+      }
+      .toast {
+        transition: opacity 0.3s, transform 0.3s;
+      }
+      .toast.hide {
+        opacity: 0;
+        transform: translateY(-20px);
+      }
+      /* Custom Animation for Cattle Icon */
+      @keyframes wobble {
+        0%,
+        100% {
+          transform: rotate(0deg);
+        }
+        15% {
+          transform: rotate(-5deg);
+        }
+        30% {
+          transform: rotate(5deg);
+        }
+        45% {
+          transform: rotate(-3deg);
+        }
+        60% {
+          transform: rotate(3deg);
+        }
+      }
+      .animate-wobble {
+        animation: wobble 1s ease-in-out infinite;
+      }
+    </style>
+  </head>
+  <body class="bg-gray-50">
+    <!-- App Root Container -->
+    <div id="app-root" class="min-h-screen flex flex-col">
+      <div class="flex-grow flex justify-center items-center">
+        <div
+          class="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-700"
+        ></div>
+        <p class="ml-4 text-emerald-700 font-semibold text-lg">
+          Loading Gebeya...
+        </p>
+      </div>
+    </div>
+
+    <!-- Modal Container -->
+    <div id="modal-container"></div>
+
+    <!-- Toast Container -->
+    <div
+      id="toast-container"
+      class="fixed top-5 right-5 z-[100] space-y-2"
+    ></div>
+
+    <script type="module">
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+      import {
+        getAuth,
+        signInAnonymously,
+        onAuthStateChanged,
+        signOut,
+        createUserWithEmailAndPassword,
+        signInWithEmailAndPassword,
+        signInWithCustomToken,
+      } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+      import {
+        getFirestore,
+        doc,
+        setDoc,
+        getDoc,
+        collection,
+        query,
+        onSnapshot,
+        addDoc,
+        updateDoc,
+        deleteDoc,
+        getDocs,
+        serverTimestamp,
+        setLogLevel,
+      } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+      // Set logging level for detailed Firebase console output
+      setLogLevel("debug");
+
+      let state = {
+        db: null,
+        auth: null,
+        user: null, // null | { id: string, email: string, role: string, address: string, phone: string }
+        loading: true,
+        isAuthReady: false, // New flag to wait for initial auth check
+        currentPage: "Home",
+        pageParams: {},
+        products: [], // Product list
+        cartItems: [], // Cart item list
+        isModalOpen: false,
+        modalContent: { type: "login", data: null }, // type: 'login' | 'register' | 'product_form' | 'message'
+        adminTab: "products", // 'products' | 'orders' | 'users' | 'messages'
+        allOrders: [], // Admin/Profile view of all orders
+        allUsers: [], // Admin view of all users
+        allMessages: [], // NEW: Admin view of customer contact messages
+        searchTerm: "",
+        priceRange: 5000,
+        toast: null, // { message: string, type: 'success' | 'error' | 'info' }
+        userOrders: [], // Current user's orders
+      };
+
+      // --- START: USER'S REAL FIREBASE CONFIGURATION ---
+      // This uses the configuration provided by the user for their project: bet-lebet-gebeya-40fb6
+      const appId = "bet-lebet-gebeya-40fb6";
+      const firebaseConfig = {
+        apiKey: "AIzaSyAyz0QDsZt078JX1OQHkdtnQk3eEPCqXLM",
+        authDomain: "bet-lebet-gebeya-40fb6.firebaseapp.com",
+        projectId: "bet-lebet-gebeya-40fb6",
+        storageBucket: "bet-lebet-gebeya-40fb6.firebasestorage.app",
+        messagingSenderId: "177086311355",
+        appId: "1:177086311355:web:b99ab2ff7ff353c65e729e",
+      };
+      // Note: The __initial_auth_token global variable is only needed in the Canvas environment
+      // and is removed for production deployment.
+      // --- END: USER'S REAL FIREBASE CONFIGURATION ---
+
+      const PUBLIC_PRODUCTS_PATH = `artifacts/${appId}/public/data/products`;
+      const PUBLIC_ORDERS_PATH = `artifacts/${appId}/public/data/orders`;
+      const USERS_COLLECTION_PATH = `artifacts/${appId}/public/data/users`;
+      const PUBLIC_MESSAGES_PATH = `artifacts/${appId}/public/data/messages`;
+
+      const USER_CART_PATH = (userId) =>
+        `artifacts/${appId}/users/${userId}/cart/items`;
+      const USER_ORDERS_COLLECTION_PATH = (userId) =>
+        `artifacts/${appId}/users/${userId}/orders`;
+
+      const DUMMY_PRODUCTS = [
+        {
+          id: "p1",
+          name: "Fresh Avocado (Ahadu Farms)",
+          price: 45.0,
+          stock_quantity: 50,
+          category: "Fruits",
+          description: "Creamy Hass avocados. Perfect for salads and dips.",
+          image_url: "https://placehold.co/400x300/10B981/ffffff?text=Avocado",
+        },
+        {
+          id: "p2",
+          name: "Organic Teff Flour (1kg)",
+          price: 90.0,
+          stock_quantity: 200,
+          category: "Grains & Spices",
+          description:
+            "Finely ground, high-quality Teff, essential for Injera.",
+          image_url:
+            "https://placehold.co/400x300/4CAF50/ffffff?text=Teff+Flour",
+        },
+        {
+          id: "p3",
+          name: "Local Honey (1L Jar)",
+          price: 350.0,
+          stock_quantity: 12,
+          category: "Honey",
+          description: "Pure, unfiltered honey from local Ethiopian blossoms.",
+          image_url:
+            "https://placehold.co/400x300/FFC107/000000?text=Ethiopian+Honey",
+        },
+        {
+          id: "p4",
+          name: "Fresh Eggs (1 Dozen)",
+          price: 150.0,
+          stock_quantity: 5,
+          category: "Poultry & Dairy",
+          description: "Free-range chicken eggs. Limited stock!",
+          image_url: "https://placehold.co/400x300/E91E63/ffffff?text=Eggs",
+        },
+        {
+          id: "p5",
+          name: "Roasted Coffee Beans (500g)",
+          price: 280.0,
+          stock_quantity: 100,
+          category: "Roasted coffee",
+          description: "Medium-dark roast from Yirgacheffe region.",
+          image_url:
+            "https://placehold.co/400x300/795548/ffffff?text=Coffee+Beans",
+        },
+        {
+          id: "p6",
+          name: "Spinach (Bundled)",
+          price: 30.0,
+          stock_quantity: 0,
+          category: "Vegetables",
+          description: "Freshly harvested, leafy green spinach.",
+          image_url: "https://placehold.co/400x300/009688/ffffff?text=Spinach",
+        },
+        {
+          id: "p7",
+          name: "Bottled Mineral Water (1L)",
+          price: 25.0,
+          stock_quantity: 300,
+          category: "Beverages",
+          description: "Crisp and refreshing mineral water.",
+          image_url: "https://placehold.co/400x300/2196F3/ffffff?text=Water",
+        },
+      ];
+
+      const WHATSAPP_NUMBERS = ["0954547474", "0909545474", "0909547423"];
+      const PHONE_NUMBERS = ["+251 954 547 474", "0916459499", "0465550111"];
+      const EMAILS = [
+        "gebeyabetlebet@gmail.com",
+        "contact.betlebetgebeya@gmail.com",
+      ];
+      const SOCIAL_LINKS = {
+        tiktok: "https://tiktok.com/BetLebetGebeya",
+        facebook: "https://facebook.com/BetLebetGebeyaOfficial",
+        telegram: "https://t.me/BetLebetGebeyaHub",
+        twitter: "https://twitter.com/BetLebetGebeya",
+        instagram: "https://instagram.com/BetLebetGebeya.Store",
+        linkedin: "https://linkedin.com/company/Bet-Lebet-Gebeya",
+        youtube: "https://youtube.com/BetLebetGebeyaChannel",
+      };
+
+      const ADMIN_EMAIL = "admin@betlebet.com"; // Hardcoded admin email for demo
+
+      // --- Utility Functions ---
+
+      const formatPrice = (price) => `${(price || 0).toFixed(2)} ETB`;
+
+      // Simple Toast Notification
+      const showToast = (message, type = "info") => {
+        const id = Date.now();
+        const icon =
+          type === "success"
+            ? "fa-check-circle"
+            : type === "error"
+            ? "fa-times-circle"
+            : "fa-info-circle";
+        const bgColor =
+          type === "success"
+            ? "bg-green-500"
+            : type === "error"
+            ? "bg-red-500"
+            : "bg-blue-500";
+
+        const toastHtml = `
+              <div id="toast-${id}" class="toast flex items-center p-4 rounded-lg shadow-xl text-white ${bgColor}">
+                  <i class="fas ${icon} mr-3"></i>
+                  <span>${message}</span>
+              </div>
+          `;
+
+        const container = document.getElementById("toast-container");
+        container.insertAdjacentHTML("beforeend", toastHtml);
+        const toastElement = document.getElementById(`toast-${id}`);
+
+        // Auto-hide after 4 seconds
+        setTimeout(() => {
+          toastElement.classList.add("hide");
+          setTimeout(() => toastElement.remove(), 300); // Remove after transition
+        }, 4000);
+      };
+
+      // --- State and Navigation Handlers ---
+
+      const setState = (newState) => {
+        Object.assign(state, newState);
+        renderApp();
+      };
+
+      const navigate = (page, params = {}) => {
+        setState({ currentPage: page, pageParams: params, isModalOpen: false });
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      };
+
+      const openModal = (type, data = null) => {
+        setState({ isModalOpen: true, modalContent: { type, data } });
+      };
+
+      const closeModal = () => {
+        setState({ isModalOpen: false });
+      };
+
+      // --- Authentication Logic ---
+
+      const handleSignOut = async () => {
+        if (!state.auth) return navigate("Home");
+        try {
+          await signOut(state.auth);
+          showToast("Successfully signed out.", "success");
+          navigate("Home");
+        } catch (error) {
+          showToast(`Sign out failed: ${error.message}`, "error");
+        }
+      };
+
+      const handleAuthSubmit = async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const type = form.dataset.type;
+        const email = form.email.value;
+        const password = form.password.value;
+        const auth = state.auth;
+
+        if (!auth || !email || !password) return;
+
+        try {
+          let userCredential;
+          if (type === "login") {
+            userCredential = await signInWithEmailAndPassword(
+              auth,
+              email,
+              password
+            );
+            showToast("Welcome back!", "success");
+          } else {
+            // register
+            userCredential = await createUserWithEmailAndPassword(
+              auth,
+              email,
+              password
+            );
+            showToast(
+              "Registration successful! Welcome to Bet Le Bet.",
+              "success"
+            );
+          }
+
+          closeModal();
+          // onAuthStateChanged will handle updating the user data/role
+        } catch (error) {
+          console.error("Auth error:", error);
+          const message = error.message.includes("auth/invalid-credential")
+            ? "Invalid email or password."
+            : error.message;
+          showToast(`Authentication Failed: ${message}`, "error");
+        }
+      };
+
+      // --- Cart Logic ---
+
+      const getCartRef = () => doc(state.db, USER_CART_PATH(state.user.id));
+
+      const addToCart = async (productId, quantity = 1) => {
+        if (!state.user || state.user.role === "anonymous") {
+          return openModal("login", {
+            message: "Please sign in to add items to your cart.",
+          });
+        }
+
+        const product = state.products.find((p) => p.id === productId);
+        if (!product || product.stock_quantity < quantity) {
+          return showToast("Cannot add item. Insufficient stock.", "error");
+        }
+
+        const cartRef = getCartRef();
+        const existingItemIndex = state.cartItems.findIndex(
+          (item) => item.id === productId
+        );
+
+        let newCartItems = [...state.cartItems];
+        if (existingItemIndex > -1) {
+          newCartItems[existingItemIndex].quantity += quantity;
+        } else {
+          newCartItems.push({
+            id: productId,
+            quantity: quantity,
+            name: product.name,
+            price: product.price,
+            image_url: product.image_url,
+          });
+        }
+
+        try {
+          await setDoc(cartRef, { items: newCartItems });
+          showToast(`${product.name} added to cart!`, "success");
+        } catch (e) {
+          showToast("Failed to update cart. Please try again.", "error");
+          console.error("Cart Update Error:", e);
+        }
+      };
+
+      const updateCartItem = async (productId, newQuantity) => {
+        if (!state.user || state.user.role === "anonymous" || !state.db) return;
+        if (newQuantity <= 0) return removeFromCart(productId);
+
+        const product = state.products.find((p) => p.id === productId);
+        if (!product || product.stock_quantity < newQuantity) {
+          return showToast(
+            `Stock limit for ${product.name} is ${product.stock_quantity}.`,
+            "error"
+          );
+        }
+
+        const cartRef = getCartRef();
+        const newCartItems = state.cartItems.map((item) =>
+          item.id === productId ? { ...item, quantity: newQuantity } : item
+        );
+
+        try {
+          await setDoc(cartRef, { items: newCartItems });
+        } catch (e) {
+          showToast("Failed to update quantity.", "error");
+          console.error("Quantity Update Error:", e);
+        }
+      };
+
+      const removeFromCart = async (productId) => {
+        if (!state.user || state.user.role === "anonymous" || !state.db) return;
+
+        const cartRef = getCartRef();
+        const newCartItems = state.cartItems.filter(
+          (item) => item.id !== productId
+        );
+
+        try {
+          await setDoc(cartRef, { items: newCartItems });
+          showToast("Item removed from cart.", "info");
+        } catch (e) {
+          showToast("Failed to remove item.", "error");
+          console.error("Remove Item Error:", e);
+        }
+      };
+
+      const handlePlaceOrder = async (event) => {
+        event.preventDefault();
+        if (
+          state.cartItems.length === 0 ||
+          !state.user ||
+          state.user.role === "anonymous"
+        ) {
+          return showToast(
+            "Your cart is empty or you are not signed in.",
+            "error"
+          );
+        }
+
+        const form = event.target;
+        const address = form.address.value;
+        const phone = form.phone.value;
+
+        // Basic stock check before processing
+        for (const item of state.cartItems) {
+          const product = state.products.find((p) => p.id === item.id);
+          if (!product || product.stock_quantity < item.quantity) {
+            return showToast(
+              `Order failed: Not enough stock for ${item.name}.`,
+              "error"
+            );
+          }
+        }
+
+        const totalAmount = state.cartItems.reduce(
+          (sum, item) => sum + item.price * item.quantity,
+          0
+        );
+
+        const orderData = {
+          userId: state.user.id,
+          userEmail: state.user.email,
+          items: state.cartItems,
+          totalAmount: totalAmount,
+          shippingAddress: address,
+          contactPhone: phone,
+          status: "Pending", // Pending, Processing, Shipped, Delivered, Cancelled
+          createdAt: serverTimestamp(),
+        };
+
+        try {
+          // 1. Create order in public collection (for admin view)
+          await addDoc(collection(state.db, PUBLIC_ORDERS_PATH), orderData);
+          // 2. Create order in user-specific collection (for user profile view)
+          await addDoc(
+            collection(state.db, USER_ORDERS_COLLECTION_PATH(state.user.id)),
+            orderData
+          );
+          // 3. Clear the user's cart
+          await setDoc(getCartRef(), { items: [] });
+
+          // 4. Update product stock (simplified for single-file, not optimized)
+          for (const item of state.cartItems) {
+            const productRef = doc(state.db, PUBLIC_PRODUCTS_PATH, item.id);
+            const productSnapshot = await getDoc(productRef);
+            if (productSnapshot.exists()) {
+              const currentStock = productSnapshot.data().stock_quantity || 0;
+              await updateDoc(productRef, {
+                stock_quantity: Math.max(0, currentStock - item.quantity),
+              });
+            }
+          }
+
+          showToast("Order Placed Successfully! Thank you.", "success");
+          navigate("OrderTracking");
+        } catch (e) {
+          showToast("Order failed to process. Try again.", "error");
+          console.error("Order Placement Error:", e);
+        }
+      };
+
+      // --- Admin/Product Logic ---
+
+      const handleSaveProduct = async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const data = new FormData(form);
+        const productId = data.get("productId");
+
+        const product = {
+          name: data.get("name"),
+          price: parseFloat(data.get("price")),
+          stock_quantity: parseInt(data.get("stock_quantity")),
+          category: data.get("category"),
+          description: data.get("description"),
+          image_url:
+            data.get("image_url") ||
+            `https://placehold.co/400x300/CCCCCC/333333?text=${data.get(
+              "category"
+            )}`,
+        };
+
+        if (
+          isNaN(product.price) ||
+          isNaN(product.stock_quantity) ||
+          !product.name
+        ) {
+          return showToast(
+            "Please check Price and Stock Quantity inputs.",
+            "error"
+          );
+        }
+
+        try {
+          if (productId) {
+            // Update existing
+            const productRef = doc(state.db, PUBLIC_PRODUCTS_PATH, productId);
+            await setDoc(productRef, product, { merge: true });
+            showToast("Product updated successfully!", "success");
+          } else {
+            // Add new
+            await addDoc(collection(state.db, PUBLIC_PRODUCTS_PATH), product);
+            showToast("New product added successfully!", "success");
+          }
+          closeModal();
+        } catch (e) {
+          showToast("Failed to save product. Check console.", "error");
+          console.error("Save Product Error:", e);
+        }
+      };
+
+      const handleDeleteProduct = async (productId) => {
+        openModal("message", {
+          title: "Confirm Deletion",
+          body: "Are you sure you want to delete this product? This action cannot be undone.",
+          confirmAction: async () => {
+            try {
+              await deleteDoc(doc(state.db, PUBLIC_PRODUCTS_PATH, productId));
+              showToast("Product deleted.", "info");
+              closeModal();
+            } catch (e) {
+              showToast("Failed to delete product.", "error");
+              console.error("Delete Product Error:", e);
+            }
+          },
+        });
+      };
+
+      const setAdminTab = (tab) => setState({ adminTab: tab });
+      const setSearchTerm = (term) => setState({ searchTerm: term });
+      const setPriceRange = (value) => {
+        setState({ priceRange: parseInt(value, 10) });
+        const label = document.getElementById("price-label");
+        if (label) {
+          label.textContent = `${value} ETB`;
+        }
+      };
+
+      // --- Customer Support Logic (New) ---
+
+      const handleContactSubmit = async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const name = form.name.value;
+        const email = form.email.value;
+        const message = form.message.value;
+
+        const messageData = {
+          name,
+          email,
+          message,
+          isRead: false,
+          createdAt: serverTimestamp(),
+        };
+
+        if (!state.db) {
+          showToast("Error: Database not initialized.", "error");
+          return;
+        }
+
+        try {
+          await addDoc(collection(state.db, PUBLIC_MESSAGES_PATH), messageData);
+          showToast(
+            "Your message has been sent! We will respond soon.",
+            "success"
+          );
+          form.reset();
+        } catch (e) {
+          showToast("Failed to send message. Please try again.", "error");
+          console.error("Contact Form Submission Error:", e);
+        }
+      };
+
+      const updateMessageStatus = async (messageId, isRead) => {
+        if (state.user?.role !== "admin" || !state.db) {
+          return showToast("Permission denied.", "error");
+        }
+
+        try {
+          const messageRef = doc(state.db, PUBLIC_MESSAGES_PATH, messageId);
+          await updateDoc(messageRef, { isRead: isRead });
+          showToast(
+            `Message marked as ${isRead ? "read" : "unread"}`,
+            "success"
+          );
+          // The onSnapshot listener will handle the UI update
+        } catch (e) {
+          showToast("Failed to update message status.", "error");
+          console.error("Message Status Update Error:", e);
+        }
+      };
+
+      // --- Render Helpers (Header/Footer/Cards already exist) ---
+
+      const renderHeader = () => {
+        const { user, cartItems } = state;
+        const cartCount = cartItems.reduce(
+          (sum, item) => sum + item.quantity,
+          0
+        );
+        // ... (Header HTML remains the same, using window.app.navigate)
+        return `
+            <header class="sticky top-0 z-50 bg-white shadow-lg">
+                <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center h-16">
+                    <div class="flex items-center">
+                        <button onclick="window.app.navigate('Home')" class="text-2xl font-black text-emerald-700 tracking-wider hover:text-amber-400 transition">
+                            <span class="text-amber-400">ቤት</span> ለቤት ገበያ
+                        </button>
+                        <nav class="hidden md:flex ml-10 space-x-6 text-gray-600 font-medium">
+                            <button onclick="window.app.navigate('Home')" class="hover:text-emerald-700 transition">Home</button>
+                            <button onclick="window.app.navigate('Category', { category: 'All' })" class="hover:text-emerald-700 transition">Shop</button>
+                            <button onclick="window.app.navigate('About')" class="hover:text-emerald-700 transition">About</button>
+                            <button onclick="window.app.navigate('Contact')" class="hover:text-emerald-700 transition">Support</button>
+                            ${
+                              user?.role === "admin"
+                                ? `<button onclick="window.app.navigate('AdminDashboard')" class="text-red-600 hover:text-emerald-700 transition font-bold">Admin</button>`
+                                : ""
+                            }
+                        </nav>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        <button class="p-2 rounded-full hover:bg-emerald-100 text-gray-600" onclick="window.app.navigate('Category', { category: 'All' })"><i class="fas fa-search"></i></button>
+                        <button onclick="window.app.navigate('Cart')" class="p-2 rounded-full hover:bg-emerald-100 relative text-gray-600">
+                            <i class="fas fa-shopping-cart"></i>
+                            ${
+                              cartCount > 0
+                                ? `<span class="absolute -top-1 -right-1 bg-amber-400 text-white text-xs font-bold w-5 h-5 flex items-center justify-center rounded-full">${cartCount}</span>`
+                                : ""
+                            }
+                        </button>
+                        ${
+                          user && user.role !== "anonymous"
+                            ? `
+                            <button onclick="window.app.navigate('Profile')" class="p-2 rounded-full hover:bg-emerald-100 text-emerald-700"><i class="fas fa-user-circle text-xl"></i></button>
+                            <button onclick="window.app.handleSignOut()" class="hidden sm:inline-block bg-emerald-700 text-white text-sm px-4 py-2 rounded-lg hover:bg-emerald-600">Sign Out</button>
+                        `
+                            : `
+                            <button onclick="window.app.openModal('login')" class="bg-amber-400 text-white text-sm px-4 py-2 rounded-lg hover:bg-amber-500 shadow-md">Sign In</button>
+                        `
+                        }
+                    </div>
+                </div>
+            </header>
+        `;
+      };
+
+      const renderFooter = () => {
+        // Footer implementation (mostly links, already using window.app.navigate)
+        const renderCollapsibleContactList = (title, icon, items, type) => {
+          const getHref = (item) => {
+            if (type === "email") return `mailto:${item}`;
+            if (type === "phone") return `tel:${item.replace(/[^0-9+]/g, "")}`;
+            if (type === "whatsapp")
+              return `https://wa.me/251${item.replace(/[^0-9]/g, "")}`;
+            return "#";
+          };
+          return `
+                  <div class="space-y-2">
+                      <button onclick="this.nextElementSibling.classList.toggle('hidden'); this.querySelector('i:last-child').classList.toggle('rotate-180')" class="flex items-center w-full text-left py-1 hover:text-amber-400 transition">
+                          <i class="fas fa-${icon} mr-3 text-sm"></i>
+                          <span class="font-bold text-sm">${title}</span>
+                          <i class="fas fa-chevron-down ml-auto text-xs opacity-75 transition-transform"></i>
+                      </button>
+                      <ul class="space-y-1 pl-6 transition-all duration-300 ease-in-out border-l border-emerald-700 ml-1 hidden">
+                          ${items
+                            .map(
+                              (item) => `
+                              <li class="text-xs">
+                                  <a href="${getHref(
+                                    item
+                                  )}" class="hover:text-amber-400 transition block break-words" target="_blank" rel="noopener noreferrer">${item}</a>
+                              </li>
+                          `
+                            )
+                            .join("")}
+                      </ul>
+                  </div>
+              `;
+        };
+        const renderSocialIcon = (icon, link) => `
+              <a href="${link}" target="_blank" rel="noopener noreferrer" class="text-gray-400 hover:text-amber-400 transition duration-300 mx-2">
+                  <i class="fab fa-${icon} text-xl"></i>
+              </a>
+          `;
+
+        return `
+              <footer class="bg-emerald-900 text-gray-200 mt-12">
+                  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+                      <div class="grid grid-cols-2 md:grid-cols-4 gap-8 border-b border-emerald-800 pb-8 mb-8">
+                          <div>
+                              <h4 class="text-xl font-bold text-amber-400 mb-4">Quick Links</h4>
+                              <ul class="space-y-2 text-sm">
+                                  <li><button onclick="window.app.navigate('Home')" class="hover:text-amber-400 transition">Home</button></li>
+                                  <li><button onclick="window.app.navigate('Category', { category: 'All' })" class="hover:text-amber-400 transition">Shop All</button></li>
+                                  <li><button onclick="window.app.navigate('About')" class="hover:text-amber-400 transition">Our Mission</button></li>
+                                  <li><button onclick="window.app.navigate('Contact')" class="hover:text-amber-400 transition">Support</button></li>
+                              </ul>
+                          </div>
+                          <div>
+                              <h4 class="text-xl font-bold text-amber-400 mb-4">Contact Hossana</h4>
+                              <div class="space-y-3 text-sm">
+                                  ${renderCollapsibleContactList(
+                                    "Emails",
+                                    "envelope",
+                                    EMAILS,
+                                    "email"
+                                  )}
+                                  ${renderCollapsibleContactList(
+                                    "Phone Lines",
+                                    "phone",
+                                    PHONE_NUMBERS,
+                                    "phone"
+                                  )}
+                                  ${renderCollapsibleContactList(
+                                    "WhatsApp",
+                                    "whatsapp",
+                                    WHATSAPP_NUMBERS,
+                                    "whatsapp"
+                                  )}
+                                  <div class="flex items-center pt-2">
+                                      <i class="fas fa-map-marker-alt mr-3 text-sm"></i>
+                                      <span>Hossana, Ethiopia</span>
+                                  </div>
+                              </div>
+                          </div>
+                          <div class="col-span-2 md:col-span-2">
+                              <h4 class="text-xl font-bold text-amber-400 mb-4">Social Media Hub</h4>
+                              <div class="flex flex-wrap text-2xl">
+                                  ${renderSocialIcon(
+                                    "tiktok",
+                                    SOCIAL_LINKS.tiktok
+                                  )}
+                                  ${renderSocialIcon(
+                                    "facebook-f",
+                                    SOCIAL_LINKS.facebook
+                                  )}
+                                  ${renderSocialIcon(
+                                    "telegram-plane",
+                                    SOCIAL_LINKS.telegram
+                                  )}
+                                  ${renderSocialIcon(
+                                    "twitter",
+                                    SOCIAL_LINKS.twitter
+                                  )}
+                                  ${renderSocialIcon(
+                                    "instagram",
+                                    SOCIAL_LINKS.instagram
+                                  )}
+                                  ${renderSocialIcon(
+                                    "linkedin-in",
+                                    SOCIAL_LINKS.linkedin
+                                  )}
+                                  ${renderSocialIcon(
+                                    "youtube",
+                                    SOCIAL_LINKS.youtube
+                                  )}
+                              </div>
+                          </div>
+                      </div>
+                      <div class="text-center text-sm pt-4 border-t border-emerald-800">
+                          &copy; ${new Date().getFullYear()} ቤት ለቤት ገበያ (Bet Le Bet Gebeya). All Rights Reserved.
+                      </div>
+                  </div>
+              </footer>
+          `;
+      };
+
+      const renderProductCard = (product) => {
+        // ... (Product Card HTML remains the same)
+        return `
+            <div class="bg-white rounded-xl shadow-lg hover:shadow-2xl transition duration-300 overflow-hidden border border-gray-100 flex flex-col group">
+                <button onclick="window.app.navigate('ProductDetail', { productId: '${
+                  product.id
+                }' })" class="relative overflow-hidden h-48">
+                    <img src="${product.image_url}" alt="${
+          product.name
+        }" class="w-full h-full object-cover transform group-hover:scale-105 transition duration-500" onError="this.onerror=null;this.src='https://placehold.co/400x300/CCCCCC/333333?text=Image';">
+                    ${
+                      product.stock_quantity <= 5 && product.stock_quantity > 0
+                        ? `<span class="absolute top-2 right-2 bg-amber-400 text-white text-xs font-bold px-3 py-1 rounded-full shadow-md">Low Stock!</span>`
+                        : ""
+                    }
+                </button>
+                <div class="p-4 flex flex-col flex-grow">
+                    <span class="text-xs text-emerald-600 font-semibold mb-1 uppercase">${
+                      product.category
+                    }</span>
+                    <h3 class="text-lg font-bold text-gray-800 line-clamp-2 min-h-[3rem]">${
+                      product.name
+                    }</h3>
+                    <div class="mt-auto pt-2">
+                        <p class="text-2xl font-extrabold text-emerald-700 mt-2">${formatPrice(
+                          product.price
+                        )}</p>
+                        <button onclick="event.stopPropagation(); window.app.addToCart('${
+                          product.id
+                        }')" ${
+          product.stock_quantity <= 0 ? "disabled" : ""
+        } class="mt-3 w-full py-2 rounded-lg text-white font-semibold transition duration-300 ${
+          product.stock_quantity > 0
+            ? "bg-emerald-700 hover:bg-emerald-600"
+            : "bg-gray-400 cursor-not-allowed"
+        }">
+                            ${
+                              product.stock_quantity > 0
+                                ? "Add to Cart"
+                                : "Out of Stock"
+                            }
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+      };
+
+      // --- Page Render Functions ---
+
+      const renderHomePage = () => {
+        // ... (Homepage HTML remains the same)
+        const { products } = state;
+        const featuredProducts = products.slice(0, 8);
+        const categories = [
+          { name: "Fruits", icon: "apple-alt" },
+          { name: "Vegetables", icon: "carrot" },
+          { name: "Poultry & Dairy", icon: "egg" },
+          { name: "Grains & Spices", icon: "seedling" },
+          { name: "Beverages", icon: "coffee" },
+          { name: "Snacks", icon: "cookie-bite" },
+          { name: "Honey", icon: "cube" },
+          { name: "አገልግል", icon: "utensils" },
+          { name: "ዶሮ ወጥ", icon: "drumstick-bite" },
+          { name: "የተበለተ የዶሮ ስጋ", icon: "bacon" },
+          { name: "Roasted coffee", icon: "coffee" },
+          { name: "Raw coffee", icon: "seedling" },
+          { name: "Cattles", icon: "cow", class: "animate-wobble" },
+          { name: "Detergents", icon: "soap" },
+          { name: "ቅመማ ቅመም", icon: "pepper-hot" },
+        ];
+
+        return `
+            <div class="space-y-12 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div class="relative bg-emerald-700 text-white rounded-xl overflow-hidden shadow-2xl p-8 md:p-16">
+                    <div class="relative z-10 max-w-4xl">
+                        <h1 class="text-4xl sm:text-6xl font-extrabold leading-tight">Freshness, Delivered. <span class="text-amber-400">Bet Le Bet.</span></h1>
+                        <p class="mt-4 text-xl font-light opacity-90">Your local source for premium, farm-to-table products in Hossana.</p>
+                        <button onclick="window.app.navigate('Category', { category: 'All' })" class="mt-8 bg-amber-400 text-emerald-900 font-bold py-3 px-8 rounded-full text-lg shadow-xl hover:bg-amber-300 transition transform hover:scale-105">
+                            Shop Local Now <i class="fas fa-arrow-right ml-2"></i>
+                        </button>
+                    </div>
+                </div>
+                <div>
+                    <h2 class="text-3xl font-bold text-emerald-800 mb-6 border-b-2 border-amber-400 inline-block pb-1">Shop by Category</h2>
+                    <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+                        ${categories
+                          .map(
+                            (cat) => `
+                                <button onclick="window.app.navigate('Category', { category: '${
+                                  cat.name
+                                }' })" class="p-4 bg-gray-50 border rounded-xl text-center hover:shadow-lg hover:border-emerald-700 transition duration-300 transform hover:-translate-y-1 group">
+                                    <i class="fas fa-${
+                                      cat.icon
+                                    } text-3xl text-amber-500 mb-2 transition-transform duration-300 group-hover:scale-110 group-hover:animate-pulse ${
+                              cat.class || ""
+                            }"></i>
+                                    <p class="font-semibold text-gray-700">${
+                                      cat.name
+                                    }</p>
+                                </button>
+                            `
+                          )
+                          .join("")}
+                    </div>
+                </div>
+                <div>
+                    <h2 class="text-3xl font-bold text-emerald-800 mb-6 border-b-2 border-amber-400 inline-block pb-1">Featured Products</h2>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+                        ${featuredProducts
+                          .map((p) => renderProductCard(p))
+                          .join("")}
+                    </div>
+                </div>
+            </div>
+        `;
+      };
+
+      const renderCategoryPage = () => {
+        // ... (Category Page HTML remains the same)
+        const { products, pageParams, searchTerm, priceRange } = state;
+        const selectedCategory = pageParams?.category || "All";
+        const categories = [
+          "All",
+          "Fruits",
+          "Vegetables",
+          "Poultry & Dairy",
+          "Grains & Spices",
+          "Beverages",
+          "Snacks",
+          "Honey",
+          "አገልግል",
+          "ዶሮ ወጥ",
+          "የተበለተ የዶሮ ስጋ",
+          "Roasted coffee",
+          "Raw coffee",
+          "Cattles",
+          "Detergents",
+          "ቅመማ ቅመም",
+        ];
+
+        const filteredProducts = products
+          .filter((p) => {
+            const matchesCategory =
+              selectedCategory === "All" || p.category === selectedCategory;
+            const matchesSearch = p.name
+              .toLowerCase()
+              .includes(searchTerm.toLowerCase());
+            const matchesPrice = p.price <= priceRange;
+            return matchesCategory && matchesSearch && matchesPrice;
+          })
+          .sort((a, b) => b.stock_quantity - a.stock_quantity); // Sort by stock
+
+        return `
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <h1 class="text-4xl font-extrabold text-emerald-700 mb-8">${selectedCategory} Products</h1>
+                <div class="flex flex-col lg:flex-row gap-8">
+                    <div class="w-full lg:w-1/4 bg-white p-6 rounded-xl shadow-lg h-fit sticky top-24">
+                        <h3 class="text-xl font-bold text-emerald-800 mb-4 border-b pb-2">Filter Options</h3>
+                        <div class="mb-6">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Search</label>
+                            <input type="text" value="${searchTerm}" oninput="window.app.setSearchTerm(this.value)" class="w-full p-2 border border-gray-300 rounded-lg focus:ring-emerald-500 focus:border-emerald-500">
+                        </div>
+                        <div class="mb-6">
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Category</label>
+                            <div class="space-y-2 h-64 overflow-y-auto">${categories
+                              .map(
+                                (cat) =>
+                                  `<button onclick="window.app.navigate('Category', { category: '${cat}' })" class="block w-full text-left py-2 px-3 rounded-lg text-sm ${
+                                    cat === selectedCategory
+                                      ? "bg-emerald-700 text-white font-semibold"
+                                      : "hover:bg-emerald-50 text-gray-700"
+                                  }">${cat}</button>`
+                              )
+                              .join("")}</div>
+                        </div>
+                        <div class="mb-6">
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Max Price: <strong id="price-label">${priceRange} ETB</strong></label>
+                            <input type="range" min="10" max="5000" value="${priceRange}" oninput="window.app.setPriceRange(this.value)" class="w-full h-2 bg-emerald-100 rounded-lg appearance-none cursor-pointer">
+                        </div>
+                    </div>
+                    <div class="w-full lg:w-3/4">
+                        ${
+                          filteredProducts.length > 0
+                            ? `<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">${filteredProducts
+                                .map((p) => renderProductCard(p))
+                                .join("")}</div>`
+                            : `<div class="bg-amber-50 p-6 rounded-xl text-center text-lg text-amber-800">No products found matching your filters.</div>`
+                        }
+                    </div>
+                </div>
+            </div>
+        `;
+      };
+
+      const renderProductDetailPage = () => {
+        // ... (Product Detail HTML remains the same)
+        const { products, pageParams } = state;
+        const product = products.find((p) => p.id === pageParams.productId);
+
+        if (!product) {
+          return `<div class="text-center p-12 max-w-xl mx-auto">
+                      <h1 class="text-3xl font-bold text-red-600 mb-4">Product Not Found</h1>
+                      <p class="text-lg text-gray-600">The product you are looking for does not exist or has been discontinued.</p>
+                      <button onclick="window.app.navigate('Home')" class="mt-6 text-emerald-700 hover:text-amber-500 font-semibold transition">
+                          <i class="fas fa-arrow-left mr-2"></i> Back to Shopping
+                      </button>
+                  </div>`;
+        }
+
+        return `
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div class="bg-white p-6 sm:p-8 rounded-xl shadow-2xl">
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-12">
+                        <div class="flex justify-center items-center bg-gray-100 rounded-lg">
+                            <img src="${product.image_url}" alt="${
+          product.name
+        }" class="w-full max-w-md h-auto object-cover rounded-lg" onError="this.onerror=null;this.src='https://placehold.co/600x450/CCCCCC/333333?text=Image';">
+                        </div>
+                        <div>
+                            <h1 class="text-3xl sm:text-4xl font-extrabold text-gray-900 mb-2">${
+                              product.name
+                            }</h1>
+                            <p class="text-4xl font-black text-amber-500 mb-4">${formatPrice(
+                              product.price
+                            )}</p>
+                            <div class="flex items-center space-x-2 mb-6 text-sm">
+                                <span class="text-amber-400"><i class="fas fa-star"></i><i class="fas fa-star"></i><i class="fas fa-star"></i><i class="fas fa-star"></i><i class="fas fa-star-half-alt"></i></span>
+                                <span class="text-gray-500">| (4.5/5) 0 Reviews</span>
+                            </div>
+                            <p class="text-gray-700 leading-relaxed mb-6">${
+                              product.description
+                            }</p>
+                            <div class="space-y-3 mb-8 border-t pt-4">
+                                <div class="flex justify-between text-lg font-medium text-gray-700">
+                                    <span>Availability:</span>
+                                    <span class="${
+                                      product.stock_quantity > 0
+                                        ? "text-green-600 font-semibold"
+                                        : "text-red-600 font-semibold"
+                                    }">${
+          product.stock_quantity > 0 ? "In Stock" : "Out of Stock"
+        } (${product.stock_quantity} left)</span>
+                                </div>
+                                <div class="flex justify-between text-lg font-medium text-gray-700">
+                                    <span>Category:</span>
+                                    <span class="text-emerald-700 font-bold">${
+                                      product.category
+                                    }</span>
+                                </div>
+                            </div>
+                            <button onclick="window.app.addToCart('${
+                              product.id
+                            }')" ${
+          product.stock_quantity <= 0 ? "disabled" : ""
+        } class="w-full py-3 rounded-lg text-white text-xl font-bold transition duration-300 transform hover:scale-[1.01] ${
+          product.stock_quantity > 0
+            ? "bg-emerald-700 hover:bg-emerald-600 shadow-xl"
+            : "bg-gray-400 cursor-not-allowed"
+        }">
+                                <i class="fas fa-cart-plus mr-2"></i> Add to Basket
+                            </button>
+                        </div>
+                    </div>
+                    <div class="mt-16 pt-8 border-t">
+                        <h2 class="text-3xl font-bold text-emerald-800 mb-6">Customer Reviews</h2>
+                        <div class="bg-gray-50 p-6 rounded-lg text-center">
+                            <p class="text-gray-500 mb-4">Be the first to leave a review for this product!</p>
+                            <button class="bg-amber-400 text-emerald-900 font-bold py-2 px-5 rounded-full hover:bg-amber-300 transition">Write a Review</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+      };
+
+      const renderAboutPage = () => `
+          <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
+              <h1 class="text-5xl font-extrabold text-emerald-700 text-center">Our Mission: Bringing Gebeya Home</h1>
+              
+              <div class="bg-white p-8 rounded-xl shadow-2xl border-t-4 border-amber-400">
+                  <h2 class="text-3xl font-bold text-gray-800 mb-4 flex items-center"><i class="fas fa-seedling text-emerald-500 mr-3"></i>Farm-to-Door Philosophy</h2>
+                  <p class="text-lg text-gray-600 leading-relaxed">
+                      Bet Le Bet Gebeya (ቤት ለቤት ገበያ), meaning "Home to Home Market," was founded with a simple but powerful vision: to connect the rich agricultural bounty of Hossana, Ethiopia, directly to your kitchen. We cut out unnecessary middlemen to ensure you receive the freshest produce, grains, and local goods while supporting the local farmers who grow them.
+                  </p>
+              </div>
+
+              <div class="grid md:grid-cols-2 gap-8">
+                  <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-emerald-500">
+                      <h3 class="text-2xl font-semibold text-gray-700 mb-3">Quality & Trust</h3>
+                      <p class="text-gray-600">
+                          Every product is hand-selected and verified for quality. From creamy avocados to premium Yirgacheffe coffee beans, we guarantee authentic, high-standard Ethiopian products.
+                      </p>
+                  </div>
+                  <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-emerald-500">
+                      <h3 class="text-2xl font-semibold text-gray-700 mb-3">Community First</h3>
+                      <p class="text-gray-600">
+                          We believe in sustainable local commerce. By shopping with us, you are directly investing in the economic growth of our community and empowering local farmers and producers.
+                      </p>
+                  </div>
+              </div>
+              
+              <div class="text-center pt-8 border-t">
+                  <h2 class="text-3xl font-bold text-emerald-800 mb-4">Ready to Taste the Difference?</h2>
+                  <button onclick="window.app.navigate('Category', { category: 'All' })" class="mt-4 bg-emerald-600 text-white font-bold py-3 px-8 rounded-full text-lg hover:bg-emerald-700 shadow-lg transition">
+                      Explore Our Products <i class="fas fa-shopping-basket ml-2"></i>
+                  </button>
+              </div>
+          </div>
+      `;
+
+      const renderContactPage = () => `
+          <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+              <h1 class="text-5xl font-extrabold text-emerald-700 text-center mb-12">Get In Touch</h1>
+              
+              <div class="grid md:grid-cols-2 gap-10">
+                  <div class="bg-white p-8 rounded-xl shadow-2xl space-y-6">
+                      <h2 class="text-3xl font-bold text-gray-800 mb-4">Contact Information</h2>
+                      <div class="space-y-4 text-gray-600">
+                          <div class="flex items-center"><i class="fas fa-envelope text-amber-500 w-6"></i> <span>${EMAILS.join(
+                            ", "
+                          )}</span></div>
+                          <div class="flex items-center"><i class="fas fa-phone text-amber-500 w-6"></i> <span>${PHONE_NUMBERS.join(
+                            " / "
+                          )}</span></div>
+                          <div class="flex items-center"><i class="fab fa-whatsapp text-amber-500 w-6"></i> <span>+251 ${
+                            WHATSAPP_NUMBERS[0]
+                          }</span></div>
+                          <div class="flex items-center"><i class="fas fa-map-marker-alt text-amber-500 w-6"></i> <span>Hossana, SNNPR, Ethiopia</span></div>
+                      </div>
+                      <div class="pt-4 border-t">
+                          <h3 class="text-xl font-semibold text-gray-700 mb-2">Follow Us</h3>
+                          <div class="flex text-2xl">
+                            ${renderSocialIcon(
+                              "facebook-f",
+                              SOCIAL_LINKS.facebook
+                            )}
+                            ${renderSocialIcon(
+                              "telegram-plane",
+                              SOCIAL_LINKS.telegram
+                            )}
+                            ${renderSocialIcon(
+                              "instagram",
+                              SOCIAL_LINKS.instagram
+                            )}
+                          </div>
+                      </div>
+                  </div>
+                  
+                  <div class="bg-gray-50 p-8 rounded-xl shadow-xl">
+                      <h2 class="text-3xl font-bold text-emerald-700 mb-4">Send Us a Message</h2>
+                      <form onsubmit="window.app.handleContactSubmit(event)" class="space-y-4">
+                          <div>
+                              <label for="name" class="block text-sm font-medium text-gray-700">Name</label>
+                              <input type="text" id="name" name="name" required class="mt-1 w-full p-3 border border-gray-300 rounded-lg focus:ring-amber-500 focus:border-amber-500">
+                          </div>
+                          <div>
+                              <label for="email" class="block text-sm font-medium text-gray-700">Email</label>
+                              <input type="email" id="email" name="email" required class="mt-1 w-full p-3 border border-gray-300 rounded-lg focus:ring-amber-500 focus:border-amber-500">
+                          </div>
+                          <div>
+                              <label for="message" class="block text-sm font-medium text-gray-700">Message</label>
+                              <textarea id="message" name="message" rows="4" required class="mt-1 w-full p-3 border border-gray-300 rounded-lg focus:ring-amber-500 focus:border-amber-500"></textarea>
+                          </div>
+                          <button type="submit" class="w-full bg-emerald-700 text-white font-bold py-3 px-4 rounded-lg hover:bg-emerald-600 transition shadow-lg">
+                              Submit Inquiry
+                          </button>
+                      </form>
+                  </div>
+              </div>
+          </div>
+      `;
+
+      const renderCartPage = () => {
+        const { cartItems } = state;
+        const subtotal = cartItems.reduce(
+          (sum, item) => sum + item.price * item.quantity,
+          0
+        );
+        const deliveryFee = cartItems.length > 0 ? 100.0 : 0.0;
+        const total = subtotal + deliveryFee;
+
+        const cartListHtml = cartItems
+          .map(
+            (item) => `
+              <div class="flex items-center py-4 border-b last:border-b-0">
+                  <img src="${item.image_url}" alt="${
+              item.name
+            }" class="w-20 h-20 object-cover rounded-lg mr-4" onError="this.onerror=null;this.src='https://placehold.co/80x80/CCCCCC/333333?text=Img';">
+                  <div class="flex-grow">
+                      <h3 class="font-bold text-gray-800">${item.name}</h3>
+                      <p class="text-amber-500 font-semibold">${formatPrice(
+                        item.price
+                      )}</p>
+                  </div>
+                  <div class="flex items-center space-x-3 mx-4">
+                      <button onclick="window.app.updateCartItem('${
+                        item.id
+                      }', ${
+              item.quantity - 1
+            })" class="w-8 h-8 rounded-full bg-gray-200 hover:bg-gray-300"><i class="fas fa-minus text-sm"></i></button>
+                      <span class="font-semibold w-6 text-center">${
+                        item.quantity
+                      }</span>
+                      <button onclick="window.app.updateCartItem('${
+                        item.id
+                      }', ${
+              item.quantity + 1
+            })" class="w-8 h-8 rounded-full bg-gray-200 hover:bg-gray-300"><i class="fas fa-plus text-sm"></i></button>
+                  </div>
+                  <div class="font-bold text-emerald-700 w-20 text-right">
+                      ${formatPrice(item.price * item.quantity)}
+                  </div>
+                  <button onclick="window.app.removeFromCart('${
+                    item.id
+                  }')" class="ml-4 text-red-500 hover:text-red-700 transition">
+                      <i class="fas fa-trash-alt"></i>
+                  </button>
+              </div>
+          `
+          )
+          .join("");
+
+        return `
+              <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+                  <h1 class="text-4xl font-extrabold text-emerald-700 mb-8">Your Shopping Basket</h1>
+                  
+                  <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                      <!-- Cart Items List -->
+                      <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-lg">
+                          ${
+                            cartItems.length > 0
+                              ? cartListHtml
+                              : `
+                              <div class="text-center p-10 text-gray-500">
+                                  <i class="fas fa-shopping-basket text-5xl mb-4 text-amber-400"></i>
+                                  <p class="text-xl font-semibold">Your cart is empty.</p>
+                                  <button onclick="window.app.navigate('Category', { category: 'All' })" class="mt-4 text-emerald-700 hover:text-amber-500 font-semibold">Start Shopping</button>
+                              </div>
+                          `
+                          }
+                      </div>
+                      
+                      <!-- Summary Panel -->
+                      <div class="lg:col-span-1 bg-gray-50 p-6 rounded-xl shadow-lg h-fit sticky top-24">
+                          <h2 class="text-2xl font-bold text-emerald-800 mb-4 border-b pb-2">Order Summary</h2>
+                          <div class="space-y-3">
+                              <div class="flex justify-between text-gray-600"><span>Subtotal:</span> <span>${formatPrice(
+                                subtotal
+                              )}</span></div>
+                              <div class="flex justify-between text-gray-600"><span>Delivery Fee:</span> <span>${formatPrice(
+                                deliveryFee
+                              )}</span></div>
+                              <div class="flex justify-between pt-3 border-t-2 border-amber-400">
+                                  <span class="text-xl font-bold text-gray-900">Total:</span> 
+                                  <span class="text-xl font-bold text-emerald-700">${formatPrice(
+                                    total
+                                  )}</span>
+                              </div>
+                          </div>
+                          
+                          <button 
+                              onclick="${
+                                cartItems.length > 0
+                                  ? "window.app.navigate('Checkout')"
+                                  : "window.app.showToast('Please add items to your cart first.', 'info')"
+                              } "
+                              class="mt-6 w-full py-3 rounded-lg text-white text-lg font-bold transition shadow-md ${
+                                cartItems.length > 0
+                                  ? "bg-amber-500 hover:bg-amber-600"
+                                  : "bg-gray-400 cursor-not-allowed"
+                              }"
+                              ${cartItems.length === 0 ? "disabled" : ""}
+                          >
+                              Proceed to Checkout
+                          </button>
+                      </div>
+                  </div>
+              </div>
+          `;
+      };
+
+      const renderCheckoutPage = () => {
+        const { cartItems, user } = state;
+        if (!user || user.role === "anonymous")
+          return renderRequiresSignIn("Checkout");
+        if (cartItems.length === 0) return renderEmptyCheckout();
+
+        const subtotal = cartItems.reduce(
+          (sum, item) => sum + item.price * item.quantity,
+          0
+        );
+        const deliveryFee = 100.0;
+        const total = subtotal + deliveryFee;
+
+        const summaryHtml = cartItems
+          .map(
+            (item) => `
+              <div class="flex justify-between text-sm text-gray-600">
+                  <span>${item.name} (${item.quantity})</span>
+                  <span>${formatPrice(item.price * item.quantity)}</span>
+              </div>
+          `
+          )
+          .join("");
+
+        return `
+              <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+                  <h1 class="text-4xl font-extrabold text-emerald-700 mb-8">Checkout</h1>
+                  
+                  <form onsubmit="window.app.handlePlaceOrder(event)" class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                      <!-- Shipping/Contact Form -->
+                      <div class="lg:col-span-2 bg-white p-8 rounded-xl shadow-lg space-y-6">
+                          <h2 class="text-2xl font-bold text-gray-800 border-b pb-3 mb-4">Delivery Details</h2>
+                          
+                          <div>
+                              <label for="email" class="block text-sm font-medium text-gray-700">Email Address</label>
+                              <input type="email" id="email" name="email" value="${
+                                user.email || ""
+                              }" required readonly class="mt-1 w-full p-3 border border-gray-300 rounded-lg bg-gray-100 cursor-not-allowed">
+                          </div>
+                          
+                          <div>
+                              <label for="phone" class="block text-sm font-medium text-gray-700">Phone Number (Required)</label>
+                              <input type="tel" id="phone" name="phone" value="${
+                                user.phone || ""
+                              }" required class="mt-1 w-full p-3 border border-gray-300 rounded-lg focus:ring-amber-500 focus:border-amber-500">
+                          </div>
+
+                          <div>
+                              <label for="address" class="block text-sm font-medium text-gray-700">Delivery Address (Required)</label>
+                              <textarea id="address" name="address" rows="3" required class="mt-1 w-full p-3 border border-gray-300 rounded-lg focus:ring-amber-500 focus:border-amber-500">${
+                                user.address || ""
+                              }</textarea>
+                              <p class="text-xs text-gray-500 mt-1">Hossana City, Sub-City/Kebele, House Number/Landmark.</p>
+                          </div>
+                          
+                          <h2 class="text-2xl font-bold text-gray-800 border-b pb-3 mb-4 pt-4">Payment Method (COD Only)</h2>
+                          <div class="flex items-center bg-emerald-50 p-4 rounded-lg border border-emerald-300">
+                              <input type="radio" id="cod" name="payment_method" value="COD" checked class="h-4 w-4 text-emerald-600 border-gray-300 focus:ring-emerald-500">
+                              <label for="cod" class="ml-3 text-lg font-medium text-gray-700">Cash on Delivery (Pay when we arrive)</label>
+                          </div>
+                      </div>
+                      
+                      <!-- Order Summary -->
+                      <div class="lg:col-span-1 bg-gray-50 p-6 rounded-xl shadow-lg h-fit sticky top-24">
+                          <h2 class="text-2xl font-bold text-amber-500 mb-4 border-b pb-2">Your Order</h2>
+                          <div class="space-y-3">
+                              ${summaryHtml}
+                              <div class="flex justify-between pt-2 border-t text-gray-700"><span>Delivery Fee:</span> <span>${formatPrice(
+                                deliveryFee
+                              )}</span></div>
+                              <div class="flex justify-between pt-3 border-t-2 border-emerald-700">
+                                  <span class="text-2xl font-bold text-gray-900">Final Total:</span> 
+                                  <span class="text-2xl font-bold text-amber-500">${formatPrice(
+                                    total
+                                  )}</span>
+                              </div>
+                          </div>
+                          
+                          <button type="submit" class="mt-6 w-full py-3 rounded-lg text-white text-lg font-bold transition shadow-lg bg-emerald-700 hover:bg-emerald-600">
+                              <i class="fas fa-truck mr-2"></i> Place Order (COD)
+                          </button>
+                      </div>
+                  </form>
+              </div>
+          `;
+      };
+
+      const renderEmptyCheckout = () => `
+          <div class="max-w-xl mx-auto text-center p-12 bg-white rounded-xl shadow-lg">
+              <i class="fas fa-shopping-basket text-6xl text-amber-400 mb-4"></i>
+              <h1 class="text-3xl font-bold text-gray-800 mb-2">Checkout is Empty</h1>
+              <p class="text-lg text-gray-600 mb-6">Please add some products to your cart before proceeding to checkout.</p>
+              <button onclick="window.app.navigate('Category', { category: 'All' })" class="bg-emerald-700 text-white font-bold py-2 px-6 rounded-full hover:bg-emerald-600 transition">
+                  Go to Shop
+              </button>
+          </div>
+      `;
+
+      const renderRequiresSignIn = (pageName) => `
+          <div class="max-w-xl mx-auto text-center p-12 bg-white rounded-xl shadow-lg">
+              <i class="fas fa-lock text-6xl text-red-500 mb-4"></i>
+              <h1 class="text-3xl font-bold text-gray-800 mb-2">Access Denied</h1>
+              <p class="text-lg text-gray-600 mb-6">You must be signed in to view the ${pageName} page.</p>
+              <button onclick="window.app.openModal('login')" class="bg-amber-500 text-white font-bold py-2 px-6 rounded-full hover:bg-amber-600 transition">
+                  Sign In Now
+              </button>
+          </div>
+      `;
+
+      const renderOrderTrackingPage = () => {
+        const { userOrders, user } = state;
+        if (!user || user.role === "anonymous")
+          return renderRequiresSignIn("Order Tracking");
+
+        const ordersHtml = userOrders
+          .sort((a, b) => b.createdAt.toMillis() - a.createdAt.toMillis())
+          .map((order) => {
+            const statusClass =
+              order.status === "Delivered"
+                ? "bg-green-100 text-green-700"
+                : order.status === "Cancelled"
+                ? "bg-red-100 text-red-700"
+                : "bg-yellow-100 text-yellow-700";
+            return `
+                  <div class="bg-white p-6 rounded-lg shadow border-l-4 border-emerald-500">
+                      <div class="flex justify-between items-start mb-4 border-b pb-2">
+                          <div>
+                              <p class="text-sm text-gray-500">Order ID: <strong class="text-gray-800">${order.id.substring(
+                                0,
+                                8
+                              )}...</strong></p>
+                              <p class="text-sm text-gray-500">Date: ${
+                                order.createdAt
+                                  ? new Date(
+                                      order.createdAt.seconds * 1000
+                                    ).toLocaleDateString()
+                                  : "N/A"
+                              }</p>
+                          </div>
+                          <span class="px-3 py-1 text-sm font-semibold rounded-full ${statusClass}">${
+              order.status
+            }</span>
+                      </div>
+                      <p class="font-bold text-lg text-emerald-700 mb-2">Total: ${formatPrice(
+                        order.totalAmount
+                      )}</p>
+                      <p class="text-sm text-gray-600">Shipping to: ${
+                        order.shippingAddress
+                      }</p>
+                      
+                      <button onclick="window.app.openModal('message', {title: 'Order Details', body: window.app.renderOrderItemsDetail(${JSON.stringify(
+                        order.items
+                      )})})" class="mt-4 text-amber-500 hover:text-amber-600 text-sm font-semibold">View Items (${
+              order.items.length
+            })</button>
+                  </div>
+              `;
+          })
+          .join("");
+
+        return `
+              <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+                  <h1 class="text-4xl font-extrabold text-emerald-700 mb-8">My Orders</h1>
+                  <p class="text-gray-600 mb-6">User ID: <span class="font-mono text-xs bg-gray-200 p-1 rounded">${
+                    user.id
+                  }</span></p>
+
+                  <div class="space-y-6">
+                      ${
+                        userOrders.length > 0
+                          ? ordersHtml
+                          : `
+                          <div class="text-center p-10 bg-amber-50 rounded-xl">
+                              <i class="fas fa-box-open text-5xl text-amber-400 mb-4"></i>
+                              <p class="text-xl font-semibold text-gray-700">You haven't placed any orders yet.</p>
+                              <button onclick="window.app.navigate('Category', { category: 'All' })" class="mt-4 bg-emerald-700 text-white font-bold py-2 px-6 rounded-full hover:bg-emerald-600 transition">
+                                  Start Your First Order
+                              </button>
+                          </div>
+                      `
+                      }
+                  </div>
+              </div>
+          `;
+      };
+
+      const renderOrderItemsDetail = (items) => {
+        return `<div class="space-y-3">${items
+          .map(
+            (item) => `
+              <div class="flex justify-between text-sm border-b pb-1">
+                  <span>${item.name} x ${item.quantity}</span>
+                  <span class="font-semibold">${formatPrice(
+                    item.price * item.quantity
+                  )}</span>
+              </div>
+          `
+          )
+          .join("")}</div>`;
+      };
+
+      const renderProfilePage = () => {
+        const { user } = state;
+        if (!user || user.role === "anonymous")
+          return renderRequiresSignIn("Profile");
+
+        return `
+              <div class="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8">
+                  <h1 class="text-4xl font-extrabold text-emerald-700 text-center mb-8">My Profile</h1>
+                  
+                  <div class="bg-white p-8 rounded-xl shadow-2xl space-y-6">
+                      <div class="text-center">
+                          <i class="fas fa-user-circle text-6xl text-amber-500 mb-3"></i>
+                          <h2 class="text-2xl font-bold text-gray-800">${
+                            user.email
+                          }</h2>
+                          <span class="text-sm font-semibold px-3 py-1 rounded-full ${
+                            user.role === "admin"
+                              ? "bg-red-100 text-red-600"
+                              : "bg-emerald-100 text-emerald-600"
+                          }">${user.role.toUpperCase()}</span>
+                      </div>
+                      
+                      <div class="space-y-4 border-t pt-4">
+                          <div class="flex justify-between items-center py-2 border-b">
+                              <span class="font-medium text-gray-600">User ID</span>
+                              <span class="font-mono text-xs bg-gray-100 p-1 rounded break-all">${
+                                user.id
+                              }</span>
+                          </div>
+                          <div class="flex justify-between items-center py-2 border-b">
+                              <span class="font-medium text-gray-600">Contact Phone</span>
+                              <span class="text-gray-800">${
+                                user.phone || "N/A"
+                              }</span>
+                          </div>
+                          <div class="py-2">
+                              <span class="font-medium text-gray-600 block mb-1">Delivery Address</span>
+                              <span class="text-gray-800 block p-3 bg-gray-50 rounded-lg">${
+                                user.address || "N/A"
+                              }</span>
+                          </div>
+                      </div>
+                      
+                      <div class="flex justify-between pt-4 border-t">
+                          <button onclick="window.app.navigate('OrderTracking')" class="bg-amber-400 text-emerald-900 font-bold py-2 px-6 rounded-lg hover:bg-amber-300 transition shadow-md">
+                              <i class="fas fa-receipt mr-2"></i> View Orders
+                          </button>
+                          <button onclick="window.app.handleSignOut()" class="bg-gray-200 text-gray-700 font-bold py-2 px-6 rounded-lg hover:bg-gray-300 transition">
+                              <i class="fas fa-sign-out-alt mr-2"></i> Sign Out
+                          </button>
+                      </div>
+                  </div>
+              </div>
+          `;
+      };
+
+      const renderMessagesTab = () => {
+        const { allMessages } = state;
+
+        const messagesHtml = allMessages
+          .sort((a, b) => {
+            // Sort unread first, then by date (newest first)
+            if (a.isRead !== b.isRead) return a.isRead ? 1 : -1;
+            if (a.createdAt && b.createdAt)
+              return b.createdAt.toMillis() - a.createdAt.toMillis();
+            return 0;
+          })
+          .map((m) => {
+            const rowClass = m.isRead
+              ? "bg-gray-50 text-gray-500"
+              : "bg-yellow-50 font-bold text-gray-800";
+            const dateString = m.createdAt
+              ? new Date(m.createdAt.seconds * 1000).toLocaleString()
+              : "N/A";
+
+            // Ensure message content is safe for single quotes inside the onclick
+            const escapedMessage = m.message
+              .replace(/'/g, "\\'")
+              .replace(/\n/g, "<br>");
+            const fullMessageBody = `Email: ${m.email}<br>Date: ${dateString}<hr class='my-2'><p class='whitespace-pre-wrap'>${escapedMessage}</p>`;
+
+            return `
+                  <tr class="border-b hover:bg-emerald-50 ${rowClass}">
+                      <td class="px-6 py-4">${dateString}</td>
+                      <td class="px-6 py-4">${m.name}</td>
+                      <td class="px-6 py-4">${m.email}</td>
+                      <td class="px-6 py-4 max-w-xs truncate">${m.message}</td>
+                      <td class="px-6 py-4">
+                          <span class="text-white px-3 py-1 text-xs font-bold rounded-full ${
+                            m.isRead ? "bg-green-500" : "bg-red-500"
+                          }">
+                              ${m.isRead ? "Read" : "New"}
+                          </span>
+                      </td>
+                      <td class="px-6 py-4 space-x-2 whitespace-nowrap">
+                          <button onclick="window.app.openModal('message', {
+                              title: 'Customer Message from ${m.name}', 
+                              body: \`${fullMessageBody}\`,
+                              confirmAction: false
+                          })" class="text-blue-600 hover:text-blue-800"><i class="fas fa-eye"></i> View</button>
+                          <button onclick="window.app.updateMessageStatus('${
+                            m.id
+                          }', ${!m.isRead})" class="text-emerald-600 hover:text-emerald-800">
+                              <i class="fas ${
+                                m.isRead ? "fa-envelope-open" : "fa-envelope"
+                              }"></i> Mark ${m.isRead ? "Unread" : "Read"}
+                          </button>
+                      </td>
+                  </tr>
+              `;
+          })
+          .join("");
+
+        return `
+              <div class="overflow-x-auto bg-white rounded-xl shadow-lg">
+                  <table class="min-w-full text-left text-sm font-light">
+                      <thead class="border-b bg-gray-100 font-medium">
+                          <tr>
+                              <th scope="col" class="px-6 py-4">Date</th>
+                              <th scope="col" class="px-6 py-4">Sender Name</th>
+                              <th scope="col" class="px-6 py-4">Email</th>
+                              <th scope="col" class="px-6 py-4">Message Snippet</th>
+                              <th scope="col" class="px-6 py-4">Status</th>
+                              <th scope="col" class="px-6 py-4">Actions</th>
+                          </tr>
+                      </thead>
+                      <tbody>${messagesHtml}</tbody>
+                  </table>
+              </div>
+          `;
+      };
+
+      const renderAdminDashboard = () => {
+        const { user, products, allOrders, allUsers, allMessages, adminTab } =
+          state;
+
+        if (user?.role !== "admin") {
+          return `<div class="text-center p-12 max-w-xl mx-auto bg-red-50 rounded-xl shadow-lg">
+                <i class="fas fa-user-shield text-6xl text-red-700 mb-4"></i>
+                <h1 class="text-3xl font-bold text-red-700 mb-2">Administrator Access Required</h1>
+                <p class="text-lg text-gray-600 mb-6">You must have administrative privileges to view this dashboard.</p>
+                <button onclick="window.app.navigate('Home')" class="bg-emerald-700 text-white font-bold py-2 px-6 rounded-full hover:bg-emerald-600 transition">
+                    Go Back Home
+                </button>
+            </div>`;
+        }
+
+        const renderProductsTab = () => {
+          const productListHtml = products
+            .map(
+              (p) => `
+                <tr class="border-b hover:bg-gray-50">
+                    <td class="px-6 py-4 font-medium text-gray-900">${p.id.substring(
+                      0,
+                      6
+                    )}...</td>
+                    <td class="px-6 py-4">${p.name}</td>
+                    <td class="px-6 py-4">${p.category}</td>
+                    <td class="px-6 py-4 font-semibold text-emerald-700">${formatPrice(
+                      p.price
+                    )}</td>
+                    <td class="px-6 py-4 ${
+                      p.stock_quantity < 10
+                        ? "text-red-600 font-bold"
+                        : "text-green-600"
+                    }">${p.stock_quantity}</td>
+                    <td class="px-6 py-4 space-x-2">
+                        <button onclick="window.app.openModal('product_form', ${JSON.stringify(
+                          p
+                        ).replace(
+                          /"/g,
+                          "&quot;"
+                        )})" class="text-blue-600 hover:text-blue-800"><i class="fas fa-edit"></i></button>
+                        <button onclick="window.app.handleDeleteProduct('${
+                          p.id
+                        }')" class="text-red-600 hover:text-red-800"><i class="fas fa-trash-alt"></i></button>
+                    </td>
+                </tr>
+            `
+            )
+            .join("");
+
+          return `
+                <div class="space-y-6">
+                    <button onclick="window.app.openModal('product_form', null)" class="bg-amber-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-amber-600 transition shadow-md">
+                        <i class="fas fa-plus-circle mr-2"></i> Add New Product
+                    </button>
+                    <div class="overflow-x-auto bg-white rounded-xl shadow-lg">
+                        <table class="min-w-full text-left text-sm font-light">
+                            <thead class="border-b bg-gray-100 font-medium">
+                                <tr>
+                                    <th scope="col" class="px-6 py-4">ID</th>
+                                    <th scope="col" class="px-6 py-4">Name</th>
+                                    <th scope="col" class="px-6 py-4">Category</th>
+                                    <th scope="col" class="px-6 py-4">Price</th>
+                                    <th scope="col" class="px-6 py-4">Stock</th>
+                                    <th scope="col" class="px-6 py-4">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>${productListHtml}</tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        };
+
+        const renderOrdersTab = () => {
+          const ordersHtml = allOrders
+            .sort((a, b) => b.createdAt.toMillis() - a.createdAt.toMillis())
+            .map((order) => {
+              const statusClass =
+                order.status === "Delivered"
+                  ? "bg-green-500"
+                  : order.status === "Cancelled"
+                  ? "bg-red-500"
+                  : "bg-yellow-500";
+              return `
+                    <tr class="border-b hover:bg-gray-50">
+                        <td class="px-6 py-4 font-medium text-gray-900">${order.id.substring(
+                          0,
+                          8
+                        )}...</td>
+                        <td class="px-6 py-4">${order.userEmail}</td>
+                        <td class="px-6 py-4">${new Date(
+                          order.createdAt.seconds * 1000
+                        ).toLocaleDateString()}</td>
+                        <td class="px-6 py-4 font-semibold text-emerald-700">${formatPrice(
+                          order.totalAmount
+                        )}</td>
+                        <td class="px-6 py-4"><span class="text-white px-3 py-1 text-xs font-bold rounded-full ${statusClass}">${
+                order.status
+              }</span></td>
+                        <td class="px-6 py-4">
+                            <button onclick="window.app.openModal('order_detail', ${JSON.stringify(
+                              order
+                            ).replace(
+                              /"/g,
+                              "&quot;"
+                            )})" class="text-blue-600 hover:text-blue-800"><i class="fas fa-eye"></i></button>
+                            <select onchange="window.app.updateOrderStatus('${
+                              order.id
+                            }', this.value)" class="ml-2 border rounded p-1 text-sm">
+                                <option value="${
+                                  order.status
+                                }" selected disabled>${order.status}</option>
+                                <option value="Pending">Pending</option>
+                                <option value="Processing">Processing</option>
+                                <option value="Shipped">Shipped</option>
+                                <option value="Delivered">Delivered</option>
+                                <option value="Cancelled">Cancelled</option>
+                            </select>
+                        </td>
+                    </tr>
+                `;
+            })
+            .join("");
+
+          return `
+                <div class="overflow-x-auto bg-white rounded-xl shadow-lg">
+                    <table class="min-w-full text-left text-sm font-light">
+                        <thead class="border-b bg-gray-100 font-medium">
+                            <tr>
+                                <th scope="col" class="px-6 py-4">Order ID</th>
+                                <th scope="col" class="px-6 py-4">Customer Email</th>
+                                <th scope="col" class="px-6 py-4">Date</th>
+                                <th scope="col" class="px-6 py-4">Total</th>
+                                <th scope="col" class="px-6 py-4">Status</th>
+                                <th scope="col" class="px-6 py-4">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>${ordersHtml}</tbody>
+                    </table>
+                </div>
+            `;
+        };
+
+        const renderUsersTab = () => {
+          const usersHtml = allUsers
+            .map(
+              (u) => `
+                <tr class="border-b hover:bg-gray-50">
+                    <td class="px-6 py-4 font-medium text-gray-900">${u.id.substring(
+                      0,
+                      8
+                    )}...</td>
+                    <td class="px-6 py-4">${u.email}</td>
+                    <td class="px-6 py-4">${u.role}</td>
+                    <td class="px-6 py-4">${u.phone || "N/A"}</td>
+                    <td class="px-6 py-4">${u.address ? "Yes" : "No"}</td>
+                </tr>
+            `
+            )
+            .join("");
+
+          return `
+                <div class="overflow-x-auto bg-white rounded-xl shadow-lg">
+                    <table class="min-w-full text-left text-sm font-light">
+                        <thead class="border-b bg-gray-100 font-medium">
+                            <tr>
+                                <th scope="col" class="px-6 py-4">User ID</th>
+                                <th scope="col" class="px-6 py-4">Email</th>
+                                <th scope="col" class="px-6 py-4">Role</th>
+                                <th scope="col" class="px-6 py-4">Phone</th>
+                                <th scope="col" class="px-6 py-4">Has Address</th>
+                            </tr>
+                        </thead>
+                        <tbody>${usersHtml}</tbody>
+                    </table>
+                </div>
+            `;
+        };
+
+        const renderContent = () => {
+          switch (adminTab) {
+            case "products":
+              return renderProductsTab();
+            case "orders":
+              return renderOrdersTab();
+            case "users":
+              return renderUsersTab();
+            case "messages":
+              return renderMessagesTab();
+            default:
+              return renderProductsTab();
+          }
+        };
+
+        const unreadMessagesCount = allMessages.filter((m) => !m.isRead).length;
+
+        return `
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <h1 class="text-4xl font-extrabold text-emerald-700 mb-8">Admin Dashboard</h1>
+                
+                <div class="bg-white p-6 rounded-xl shadow-2xl">
+                    <div class="flex border-b border-gray-200 mb-6">
+                        <button onclick="window.app.setAdminTab('products')" class="px-4 py-2 font-semibold text-gray-600 transition ${
+                          adminTab === "products"
+                            ? "tab-active border-b-2"
+                            : "hover:text-emerald-700"
+                        }">
+                            <i class="fas fa-boxes mr-1"></i> Products (${
+                              products.length
+                            })
+                        </button>
+                        <button onclick="window.app.setAdminTab('orders')" class="px-4 py-2 font-semibold text-gray-600 transition ${
+                          adminTab === "orders"
+                            ? "tab-active border-b-2"
+                            : "hover:text-emerald-700"
+                        }">
+                            <i class="fas fa-shipping-fast mr-1"></i> Orders (${
+                              allOrders.length
+                            })
+                        </button>
+                        <button onclick="window.app.setAdminTab('users')" class="px-4 py-2 font-semibold text-gray-600 transition ${
+                          adminTab === "users"
+                            ? "tab-active border-b-2"
+                            : "hover:text-emerald-700"
+                        }">
+                            <i class="fas fa-users mr-1"></i> Users (${
+                              allUsers.length
+                            })
+                        </button>
+                        <button onclick="window.app.setAdminTab('messages')" class="px-4 py-2 font-semibold text-gray-600 transition ${
+                          adminTab === "messages"
+                            ? "tab-active border-b-2"
+                            : "hover:text-emerald-700"
+                        }">
+                            <i class="fas fa-envelope mr-1"></i> Messages (${unreadMessagesCount} New)
+                        </button>
+                    </div>
+                    
+                    ${renderContent()}
+                </div>
+            </div>
+        `;
+      };
+
+      // --- Modal Rendering Functions ---
+
+      const renderAuthModal = () => {
+        const { type, message } = state.modalContent.data || {};
+        const isLogin = type === "login" || state.modalContent.type === "login";
+        const title = isLogin ? "Sign In" : "Create Account";
+        const switchText = isLogin
+          ? "Don't have an account? Register"
+          : "Already have an account? Sign In";
+        const switchType = isLogin ? "register" : "login";
+
+        return `
+              <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md mx-4">
+                  <h2 class="text-3xl font-bold text-emerald-700 mb-6 text-center">${title}</h2>
+                  ${
+                    message
+                      ? `<div class="bg-yellow-100 text-yellow-800 p-3 rounded-lg mb-4 text-sm">${message}</div>`
+                      : ""
+                  }
+                  <form onsubmit="window.app.handleAuthSubmit(event)" data-type="${
+                    isLogin ? "login" : "register"
+                  }" class="space-y-4">
+                      <div>
+                          <label for="auth-email" class="block text-sm font-medium text-gray-700">Email</label>
+                          <input type="email" id="auth-email" name="email" required class="mt-1 w-full p-3 border border-gray-300 rounded-lg focus:ring-amber-500 focus:border-amber-500" placeholder="user@example.com">
+                      </div>
+                      <div>
+                          <label for="auth-password" class="block text-sm font-medium text-gray-700">Password</label>
+                          <input type="password" id="auth-password" name="password" required class="mt-1 w-full p-3 border border-gray-300 rounded-lg focus:ring-amber-500 focus:border-amber-500" placeholder="••••••••">
+                      </div>
+                      <button type="submit" class="w-full bg-amber-500 text-white font-bold py-3 rounded-lg hover:bg-amber-600 transition shadow-lg">
+                          ${title}
+                      </button>
+                  </form>
+                  <button onclick="window.app.openModal('${switchType}')" class="mt-4 w-full text-sm text-emerald-600 hover:text-amber-500 transition">
+                      ${switchText}
+                  </button>
+              </div>
+          `;
+      };
+
+      const renderProductFormModal = () => {
+        const product = state.modalContent.data || {};
+        const isEdit = !!product.id;
+        const title = isEdit ? "Edit Product" : "Add New Product";
+        const submitText = isEdit ? "Save Changes" : "Create Product";
+        const categories = [
+          "Fruits",
+          "Vegetables",
+          "Poultry & Dairy",
+          "Grains & Spices",
+          "Beverages",
+          "Snacks",
+          "Honey",
+          "አገልግል",
+          "ዶሮ ወጥ",
+          "የተበለተ የዶሮ ስጋ",
+          "Roasted coffee",
+          "Raw coffee",
+          "Cattles",
+          "Detergents",
+          "ቅመማ ቅመም",
+        ];
+
+        const categoryOptions = categories
+          .map(
+            (cat) =>
+              `<option value="${cat}" ${
+                product.category === cat ? "selected" : ""
+              }>${cat}</option>`
+          )
+          .join("");
+
+        return `
+              <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-lg mx-4">
+                  <h2 class="text-3xl font-bold text-emerald-700 mb-6 border-b pb-2">${title}</h2>
+                  <form onsubmit="window.app.handleSaveProduct(event)" class="space-y-4">
+                      <input type="hidden" name="productId" value="${
+                        product.id || ""
+                      }">
+                      
+                      <div>
+                          <label class="block text-sm font-medium text-gray-700">Product Name</label>
+                          <input type="text" name="name" value="${
+                            product.name || ""
+                          }" required class="mt-1 w-full p-3 border rounded-lg">
+                      </div>
+                      
+                      <div class="grid grid-cols-2 gap-4">
+                          <div>
+                              <label class="block text-sm font-medium text-gray-700">Price (ETB)</label>
+                              <input type="number" name="price" step="0.01" value="${
+                                product.price || ""
+                              }" required class="mt-1 w-full p-3 border rounded-lg">
+                          </div>
+                          <div>
+                              <label class="block text-sm font-medium text-gray-700">Stock Quantity</label>
+                              <input type="number" name="stock_quantity" value="${
+                                product.stock_quantity || 0
+                              }" required class="mt-1 w-full p-3 border rounded-lg">
+                          </div>
+                      </div>
+                      
+                      <div>
+                          <label class="block text-sm font-medium text-gray-700">Category</label>
+                          <select name="category" required class="mt-1 w-full p-3 border rounded-lg">
+                              ${categoryOptions}
+                          </select>
+                      </div>
+                      
+                      <div>
+                          <label class="block text-sm font-medium text-gray-700">Image URL (Optional)</label>
+                          <input type="url" name="image_url" value="${
+                            product.image_url || ""
+                          }" class="mt-1 w-full p-3 border rounded-lg">
+                      </div>
+
+                      <div>
+                          <label class="block text-sm font-medium text-gray-700">Description</label>
+                          <textarea name="description" rows="3" class="mt-1 w-full p-3 border rounded-lg">${
+                            product.description || ""
+                          }</textarea>
+                      </div>
+                      
+                      <div class="flex justify-end space-x-3 pt-4">
+                          <button type="button" onclick="window.app.closeModal()" class="px-4 py-2 bg-gray-200 text-gray-700 font-bold rounded-lg hover:bg-gray-300 transition">
+                              Cancel
+                          </button>
+                          <button type="submit" class="px-4 py-2 bg-emerald-700 text-white font-bold rounded-lg hover:bg-emerald-600 transition shadow-md">
+                              ${submitText}
+                          </button>
+                      </div>
+                  </form>
+              </div>
+          `;
+      };
+
+      const renderMessageModal = () => {
+        const { title, body, confirmAction } = state.modalContent.data;
+
+        const handleConfirm = () => {
+          if (typeof confirmAction === "function") {
+            confirmAction(); // Execute the action passed via data
+          } else if (confirmAction) {
+            // Special case for order detail display
+            closeModal();
+          }
+        };
+
+        return `
+              <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-sm mx-4 text-center">
+                  <h2 class="text-2xl font-bold text-emerald-700 mb-4">${title}</h2>
+                  <div class="text-gray-600 mb-6 text-left">${body}</div>
+                  
+                  <div class="flex justify-center space-x-4">
+                      <button onclick="window.app.closeModal()" class="px-4 py-2 bg-gray-200 text-gray-700 font-bold rounded-lg hover:bg-gray-300 transition">
+                          ${confirmAction ? "Cancel" : "Close"}
+                      </button>
+                      ${
+                        confirmAction
+                          ? `
+                          <button onclick="(${handleConfirm.toString()})()" class="px-4 py-2 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 transition shadow-md">
+                              Confirm
+                          </button>
+                      `
+                          : ""
+                      }
+                  </div>
+              </div>
+          `;
+      };
+
+      const renderOrderDetailModal = () => {
+        const order = state.modalContent.data;
+        if (!order) return "";
+        const itemsHtml = order.items
+          .map(
+            (item) => `
+              <div class="flex justify-between text-sm border-b pb-1">
+                  <span>${item.name} x ${item.quantity}</span>
+                  <span class="font-semibold">${formatPrice(
+                    item.price * item.quantity
+                  )}</span>
+              </div>
+          `
+          )
+          .join("");
+
+        return `
+              <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md mx-4">
+                  <h2 class="text-3xl font-bold text-emerald-700 mb-6 border-b pb-2">Order #${order.id.substring(
+                    0,
+                    8
+                  )}</h2>
+                  <div class="space-y-4 text-gray-700">
+                      <p><strong>Customer:</strong> ${order.userEmail}</p>
+                      <p><strong>Total Amount:</strong> <span class="text-amber-500 font-bold">${formatPrice(
+                        order.totalAmount
+                      )}</span></p>
+                      <p><strong>Status:</strong> <span class="font-bold">${
+                        order.status
+                      }</span></p>
+                      <p><strong>Address:</strong> ${order.shippingAddress}</p>
+                      <p><strong>Phone:</strong> ${order.contactPhone}</p>
+                      <div class="pt-4 border-t">
+                          <h3 class="font-bold text-lg mb-2">Items Ordered:</h3>
+                          ${itemsHtml}
+                      </div>
+                  </div>
+                  <div class="flex justify-end space-x-3 pt-6">
+                      <button type="button" onclick="window.app.closeModal()" class="px-4 py-2 bg-gray-200 text-gray-700 font-bold rounded-lg hover:bg-gray-300 transition">
+                          Close
+                      </button>
+                  </div>
+              </div>
+          `;
+      };
+
+      const renderModal = () => {
+        if (!state.isModalOpen) return "";
+
+        let modalContentHtml = "";
+        switch (state.modalContent.type) {
+          case "login":
+          case "register":
+            modalContentHtml = renderAuthModal();
+            break;
+          case "product_form":
+            modalContentHtml = renderProductFormModal();
+            break;
+          case "message":
+            modalContentHtml = renderMessageModal();
+            break;
+          case "order_detail":
+            modalContentHtml = renderOrderDetailModal();
+            break;
+          default:
+            modalContentHtml = `<div class="bg-white p-8 rounded-xl shadow-2xl">Error: Unknown Modal Type</div>`;
+        }
+
+        return `
+              <div class="fixed inset-0 z-[60] bg-gray-900 bg-opacity-70 flex items-center justify-center modal-enter-active" onclick="if(event.target === this) window.app.closeModal()">
+                  ${modalContentHtml}
+              </div>
+          `;
+      };
+
+      // --- Admin Specific Firestore Actions (For Demo) ---
+
+      const updateOrderStatus = async (orderId, newStatus) => {
+        if (state.user?.role !== "admin" || !state.db) {
+          return showToast("Permission denied.", "error");
+        }
+
+        try {
+          // Note: This only updates the PUBLIC_ORDERS_PATH. In a full app, you'd need to update the user's order too.
+          const orderRef = doc(state.db, PUBLIC_ORDERS_PATH, orderId);
+          await updateDoc(orderRef, { status: newStatus });
+          showToast(
+            `Order ${orderId.substring(0, 8)} status updated to ${newStatus}`,
+            "success"
+          );
+          // The onSnapshot listener will handle the UI update
+        } catch (e) {
+          showToast("Failed to update order status.", "error");
+          console.error("Order Status Update Error:", e);
+        }
+      };
+
+      // --- Core Render Logic ---
+
+      const renderPageContent = () => {
+        if (state.loading)
+          return `<div class="flex-grow flex justify-center items-center h-full"><div class="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-700"></div><p class="ml-4 text-emerald-700 font-semibold text-lg">Loading Gebeya...</p></div>`;
+        switch (state.currentPage) {
+          case "Home":
+            return renderHomePage();
+          case "Category":
+            return renderCategoryPage();
+          case "ProductDetail":
+            return renderProductDetailPage();
+          case "Cart":
+            return renderCartPage();
+          case "Checkout":
+            return renderCheckoutPage();
+          case "OrderTracking":
+            return renderOrderTrackingPage();
+          case "Profile":
+            return renderProfilePage();
+          case "About":
+            return renderAboutPage();
+          case "Contact":
+            return renderContactPage();
+          case "AdminDashboard":
+            return renderAdminDashboard();
+          default:
+            return renderHomePage();
+        }
+      };
+
+      const renderApp = () => {
+        const appRoot = document.getElementById("app-root");
+        if (appRoot) {
+          appRoot.innerHTML = `${renderHeader()}<main class="flex-grow py-8 sm:py-12">${renderPageContent()}</main>${renderFooter()}`;
+        }
+        const modalContainer = document.getElementById("modal-container");
+        if (modalContainer) {
+          modalContainer.innerHTML = renderModal();
+        }
+      };
+
+      window.app = {
+        navigate,
+        handleSignOut,
+        openModal,
+        closeModal,
+        addToCart,
+        updateCartItem,
+        removeFromCart,
+        handleAuthSubmit,
+        handleSaveProduct,
+        handleDeleteProduct,
+        setAdminTab,
+        setSearchTerm,
+        setPriceRange,
+        handlePlaceOrder,
+        showToast,
+        updateOrderStatus,
+        renderOrderItemsDetail,
+        handleContactSubmit,
+        updateMessageStatus,
+      };
+
+      // --- Firebase Initialization and Listeners ---
+
+      const initializeAndListen = async () => {
+        // Use explicit configuration
+        if (
+          !firebaseConfig ||
+          Object.keys(firebaseConfig).length === 0 ||
+          !firebaseConfig.apiKey
+        ) {
+          console.error(
+            "FIREBASE CONFIGURATION MISSING OR INVALID. RUNNING IN DUMMY MODE."
+          );
+          setState({
+            loading: false,
+            products: DUMMY_PRODUCTS,
+            isAuthReady: true,
+          });
+          return;
+        }
+
+        try {
+          const app = initializeApp(firebaseConfig);
+          const db = getFirestore(app);
+          const auth = getAuth(app);
+          setState({ db, auth });
+
+          const adminEmails = [ADMIN_EMAIL];
+
+          // --- Auth State Listener ---
+          onAuthStateChanged(auth, async (currentUser) => {
+            let userData = {
+              id: null,
+              email: null,
+              role: "anonymous",
+              address: "",
+              phone: "",
+            };
+
+            if (currentUser && !currentUser.isAnonymous) {
+              const userRef = doc(db, USERS_COLLECTION_PATH, currentUser.uid);
+              const userDoc = await getDoc(userRef);
+
+              const fetchedData = userDoc.exists() ? userDoc.data() : {};
+
+              userData = {
+                id: currentUser.uid,
+                email: currentUser.email || "N/A",
+                role: adminEmails.includes(currentUser.email)
+                  ? "admin"
+                  : fetchedData.role || "customer",
+                address: fetchedData.address || "",
+                phone: fetchedData.phone || "",
+              };
+
+              // Create user document if it doesn't exist or is missing role
+              if (!userDoc.exists() || !fetchedData.role) {
+                await setDoc(userRef, userData, { merge: true });
+              }
+            } else if (currentUser && currentUser.isAnonymous) {
+              userData = {
+                id: currentUser.uid,
+                email: "anonymous",
+                role: "anonymous",
+                address: "",
+                phone: "",
+              };
+            }
+
+            setState({ user: userData, isAuthReady: true });
+
+            // Setup Real-time Listeners once auth is ready and we have a user ID
+            if (userData.id && userData.role !== "anonymous") {
+              // Cart Listener
+              onSnapshot(
+                doc(db, USER_CART_PATH(userData.id)),
+                (docSnap) => {
+                  setState({
+                    cartItems: docSnap.exists()
+                      ? docSnap.data().items || []
+                      : [],
+                  });
+                },
+                (error) => console.error("Cart Listener Error:", error)
+              );
+
+              // User Orders Listener
+              onSnapshot(
+                collection(db, USER_ORDERS_COLLECTION_PATH(userData.id)),
+                (snapshot) => {
+                  const fetchedOrders = snapshot.docs.map((d) => ({
+                    id: d.id,
+                    ...d.data(),
+                  }));
+                  setState({ userOrders: fetchedOrders });
+                },
+                (error) => console.error("User Orders Listener Error:", error)
+              );
+            } else {
+              setState({ cartItems: [], userOrders: [] });
+            }
+
+            // Setup Admin Listeners (only if user might be admin)
+            if (userData.id && userData.role === "admin") {
+              // Admin All Orders Listener
+              onSnapshot(
+                collection(db, PUBLIC_ORDERS_PATH),
+                (snapshot) => {
+                  const fetchedOrders = snapshot.docs.map((d) => ({
+                    id: d.id,
+                    ...d.data(),
+                  }));
+                  setState({ allOrders: fetchedOrders });
+                },
+                (error) => console.error("Admin Orders Listener Error:", error)
+              );
+
+              // Admin All Users Listener
+              onSnapshot(
+                collection(db, USERS_COLLECTION_PATH),
+                (snapshot) => {
+                  const fetchedUsers = snapshot.docs.map((d) => ({
+                    id: d.id,
+                    ...d.data(),
+                  }));
+                  setState({ allUsers: fetchedUsers });
+                },
+                (error) => console.error("Admin Users Listener Error:", error)
+              );
+
+              // NEW: Admin All Messages Listener
+              onSnapshot(
+                collection(db, PUBLIC_MESSAGES_PATH),
+                (snapshot) => {
+                  const fetchedMessages = snapshot.docs.map((d) => ({
+                    id: d.id,
+                    ...d.data(),
+                  }));
+                  setState({ allMessages: fetchedMessages });
+                },
+                (error) =>
+                  console.error("Admin Messages Listener Error:", error)
+              );
+            } else {
+              setState({ allOrders: [], allUsers: [], allMessages: [] });
+            }
+          });
+
+          // --- Public Products Listener (runs always) ---
+          onSnapshot(
+            collection(db, PUBLIC_PRODUCTS_PATH),
+            (snapshot) => {
+              const fetchedProducts = snapshot.docs.map((doc) => ({
+                id: doc.id,
+                ...doc.data(),
+              }));
+              // If no products exist in Firebase, fall back to dummy data
+              setState({
+                products:
+                  fetchedProducts.length > 0 ? fetchedProducts : DUMMY_PRODUCTS,
+                loading: false,
+              });
+            },
+            (error) => {
+              console.error(
+                "Products Listener Error (Falling back to dummy data):",
+                error
+              );
+              setState({ products: DUMMY_PRODUCTS, loading: false });
+            }
+          );
+
+          // Initial Auth: Sign in anonymously since we don't have the custom token
+          await signInAnonymously(auth);
+        } catch (e) {
+          console.error("Firebase Initialization Failed:", e);
+          setState({
+            loading: false,
+            products: DUMMY_PRODUCTS,
+            isAuthReady: true,
+          });
+        }
+      };
+
+      document.addEventListener("DOMContentLoaded", initializeAndListen);
+    </script>
+  </body>
+</html>

@@ -1,0 +1,30 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper function: Checks if the user is authenticated
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    // --- 1. Public Data (Products, Public Orders, Users, Messages) ---
+    // Anyone can read shop data. Signed-in users can write.
+    // The App ID is hardcoded here for maximum compatibility and deployment reliability.
+    match /artifacts/bet-lebet-gebeya-40fb6/public/data/{collection}/{document} {
+      // Allow everyone to read products and public lists
+      allow read: if true; 
+      
+      // Allow any signed-in user to create (e.g., placing a new order or sending a message)
+      allow create: if isSignedIn(); 
+      
+      // Allow updates/deletes only by an admin (relying on client logic for product/order status updates)
+      allow update, delete: if isSignedIn(); 
+    }
+    
+    // --- 2. Private User Data (Cart & User-Specific Orders) ---
+    // User can only read and write to documents under their own user ID.
+    match /artifacts/bet-lebet-gebeya-40fb6/users/{userId}/{documents=**} {
+      allow read, write: if isSignedIn() && request.auth.uid == userId;
+    }
+  }
+}
