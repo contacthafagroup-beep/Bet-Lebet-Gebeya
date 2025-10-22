@@ -86,7 +86,6 @@
     </style>
   </head>
   <body class="bg-gray-50">
-    <!-- App Root Container -->
     <div id="app-root" class="min-h-screen flex flex-col">
       <div class="flex-grow flex justify-center items-center">
         <div
@@ -98,10 +97,8 @@
       </div>
     </div>
 
-    <!-- Modal Container -->
     <div id="modal-container"></div>
 
-    <!-- Toast Container -->
     <div
       id="toast-container"
       class="fixed top-5 right-5 z-[100] space-y-2"
@@ -148,19 +145,20 @@
         products: [], // Product list
         cartItems: [], // Cart item list
         isModalOpen: false,
-        modalContent: { type: "login", data: null }, // type: 'login' | 'register' | 'product_form' | 'message'
-        adminTab: "products", // 'products' | 'orders' | 'users' | 'messages'
+        modalContent: { type: "login", data: null }, // type: 'login' | 'register' | 'product_form' | 'message' | 'review_form'
+        adminTab: "products", // 'products' | 'orders' | 'users' | 'messages' | 'reviews'
         allOrders: [], // Admin/Profile view of all orders
         allUsers: [], // Admin view of all users
         allMessages: [], // NEW: Admin view of customer contact messages
+        allReviews: [], // NEW: Admin view of all reviews
         searchTerm: "",
         priceRange: 5000,
         toast: null, // { message: string, type: 'success' | 'error' | 'info' }
         userOrders: [], // Current user's orders
+        deliveryFee: 100.0, // NEW: Manageable Delivery Fee
       };
 
       // --- START: USER'S REAL FIREBASE CONFIGURATION ---
-      // This uses the configuration provided by the user for their project: bet-lebet-gebeya-40fb6
       const appId = "bet-lebet-gebeya-40fb6";
       const firebaseConfig = {
         apiKey: "AIzaSyAyz0QDsZt078JX1OQHkdtnQk3eEPCqXLM",
@@ -170,14 +168,14 @@
         messagingSenderId: "177086311355",
         appId: "1:177086311355:web:b99ab2ff7ff353c65e729e",
       };
-      // Note: The __initial_auth_token global variable is only needed in the Canvas environment
-      // and is removed for production deployment.
       // --- END: USER'S REAL FIREBASE CONFIGURATION ---
 
       const PUBLIC_PRODUCTS_PATH = `artifacts/${appId}/public/data/products`;
       const PUBLIC_ORDERS_PATH = `artifacts/${appId}/public/data/orders`;
       const USERS_COLLECTION_PATH = `artifacts/${appId}/public/data/users`;
       const PUBLIC_MESSAGES_PATH = `artifacts/${appId}/public/data/messages`;
+      const PUBLIC_REVIEWS_PATH = `artifacts/${appId}/public/data/reviews`; // NEW
+      const PUBLIC_SETTINGS_PATH = `artifacts/${appId}/public/data/settings`; // NEW
 
       const USER_CART_PATH = (userId) =>
         `artifacts/${appId}/users/${userId}/cart/items`;
@@ -224,36 +222,9 @@
           description: "Free-range chicken eggs. Limited stock!",
           image_url: "https://placehold.co/400x300/E91E63/ffffff?text=Eggs",
         },
-        {
-          id: "p5",
-          name: "Roasted Coffee Beans (500g)",
-          price: 280.0,
-          stock_quantity: 100,
-          category: "Roasted coffee",
-          description: "Medium-dark roast from Yirgacheffe region.",
-          image_url:
-            "https://placehold.co/400x300/795548/ffffff?text=Coffee+Beans",
-        },
-        {
-          id: "p6",
-          name: "Spinach (Bundled)",
-          price: 30.0,
-          stock_quantity: 0,
-          category: "Vegetables",
-          description: "Freshly harvested, leafy green spinach.",
-          image_url: "https://placehold.co/400x300/009688/ffffff?text=Spinach",
-        },
-        {
-          id: "p7",
-          name: "Bottled Mineral Water (1L)",
-          price: 25.0,
-          stock_quantity: 300,
-          category: "Beverages",
-          description: "Crisp and refreshing mineral water.",
-          image_url: "https://placehold.co/400x300/2196F3/ffffff?text=Water",
-        },
       ];
 
+      const ADMIN_EMAIL = "admin@betlebet.com"; // Hardcoded admin email for demo
       const WHATSAPP_NUMBERS = ["0954547474", "0909545474", "0909547423"];
       const PHONE_NUMBERS = ["+251 954 547 474", "0916459499", "0465550111"];
       const EMAILS = [
@@ -269,8 +240,6 @@
         linkedin: "https://linkedin.com/company/Bet-Lebet-Gebeya",
         youtube: "https://youtube.com/BetLebetGebeyaChannel",
       };
-
-      const ADMIN_EMAIL = "admin@betlebet.com"; // Hardcoded admin email for demo
 
       // --- Utility Functions ---
 
@@ -293,10 +262,10 @@
             : "bg-blue-500";
 
         const toastHtml = `
-              <div id="toast-${id}" class="toast flex items-center p-4 rounded-lg shadow-xl text-white ${bgColor}">
-                  <i class="fas ${icon} mr-3"></i>
-                  <span>${message}</span>
-              </div>
+            <div id="toast-${id}" class="toast flex items-center p-4 rounded-lg shadow-xl text-white ${bgColor}">
+                <i class="fas ${icon} mr-3"></i>
+                <span>${message}</span>
+            </div>
           `;
 
         const container = document.getElementById("toast-container");
@@ -499,10 +468,11 @@
           }
         }
 
-        const totalAmount = state.cartItems.reduce(
+        const subtotal = state.cartItems.reduce(
           (sum, item) => sum + item.price * item.quantity,
           0
         );
+        const totalAmount = subtotal + state.deliveryFee;
 
         const orderData = {
           userId: state.user.id,
@@ -517,16 +487,23 @@
 
         try {
           // 1. Create order in public collection (for admin view)
-          await addDoc(collection(state.db, PUBLIC_ORDERS_PATH), orderData);
+          const newOrderRef = await addDoc(
+            collection(state.db, PUBLIC_ORDERS_PATH),
+            orderData
+          );
           // 2. Create order in user-specific collection (for user profile view)
-          await addDoc(
-            collection(state.db, USER_ORDERS_COLLECTION_PATH(state.user.id)),
+          await setDoc(
+            doc(
+              state.db,
+              USER_ORDERS_COLLECTION_PATH(state.user.id),
+              newOrderRef.id
+            ),
             orderData
           );
           // 3. Clear the user's cart
           await setDoc(getCartRef(), { items: [] });
 
-          // 4. Update product stock (simplified for single-file, not optimized)
+          // 4. Update product stock
           for (const item of state.cartItems) {
             const productRef = doc(state.db, PUBLIC_PRODUCTS_PATH, item.id);
             const productSnapshot = await getDoc(productRef);
@@ -546,7 +523,33 @@
         }
       };
 
-      // --- Admin/Product Logic ---
+      // --- Admin/Product/Fee Logic ---
+
+      // NEW: Admin Delivery Fee Management
+      const updateDeliveryFee = async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const newFee = parseFloat(form.deliveryFee.value);
+
+        if (state.user?.role !== "admin" || !state.db || isNaN(newFee)) {
+          return showToast("Permission denied or invalid fee.", "error");
+        }
+
+        try {
+          await setDoc(
+            doc(state.db, PUBLIC_SETTINGS_PATH, "general"),
+            { deliveryFee: newFee },
+            { merge: true }
+          );
+          showToast(
+            `Delivery fee updated to ${formatPrice(newFee)}`,
+            "success"
+          );
+        } catch (e) {
+          showToast("Failed to update delivery fee.", "error");
+          console.error("Fee Update Error:", e);
+        }
+      };
 
       const handleSaveProduct = async (event) => {
         event.preventDefault();
@@ -568,12 +571,13 @@
         };
 
         if (
+          state.user?.role !== "admin" ||
           isNaN(product.price) ||
           isNaN(product.stock_quantity) ||
           !product.name
         ) {
           return showToast(
-            "Please check Price and Stock Quantity inputs.",
+            "Permission denied or invalid product data.",
             "error"
           );
         }
@@ -596,22 +600,49 @@
         }
       };
 
+      // *** CORRECTED DELETE LOGIC ***
+      // We store the async function temporarily and execute it via a unique ID.
       const handleDeleteProduct = async (productId) => {
+        if (state.user?.role !== "admin" || !state.db) {
+          return showToast("Permission denied.", "error");
+        }
+
+        const tempActionId = `delete_product_${Date.now()}`;
+
+        // Store the actual asynchronous delete function
+        window.app._pendingActions = window.app._pendingActions || {};
+        window.app._pendingActions[tempActionId] = async () => {
+          try {
+            // The delete operation is placed here.
+            await deleteDoc(doc(state.db, PUBLIC_PRODUCTS_PATH, productId));
+            showToast("Product deleted.", "info");
+          } catch (e) {
+            showToast("Failed to delete product.", "error");
+            console.error("Delete Product Error:", e);
+          } finally {
+            closeModal(); // Close the modal in any case after attempt
+            delete window.app._pendingActions[tempActionId]; // Clean up
+          }
+        };
+
+        // Open the modal, passing the unique ID of the stored function
         openModal("message", {
           title: "Confirm Deletion",
           body: "Are you sure you want to delete this product? This action cannot be undone.",
-          confirmAction: async () => {
-            try {
-              await deleteDoc(doc(state.db, PUBLIC_PRODUCTS_PATH, productId));
-              showToast("Product deleted.", "info");
-              closeModal();
-            } catch (e) {
-              showToast("Failed to delete product.", "error");
-              console.error("Delete Product Error:", e);
-            }
-          },
+          confirmActionId: tempActionId, // Pass the ID, not the function
         });
       };
+
+      // Global wrapper to execute stored actions (needed for HTML inline calls)
+      const executePendingAction = (id) => {
+        if (window.app._pendingActions && window.app._pendingActions[id]) {
+          window.app._pendingActions[id](); // Execute the stored function
+        } else {
+          showToast("Error: Action expired or not found.", "error");
+          closeModal();
+        }
+      };
+      // *** END CORRECTED DELETE LOGIC ***
 
       const setAdminTab = (tab) => setState({ adminTab: tab });
       const setSearchTerm = (term) => setState({ searchTerm: term });
@@ -623,8 +654,7 @@
         }
       };
 
-      // --- Customer Support Logic (New) ---
-
+      // --- Customer Support Logic ---
       const handleContactSubmit = async (event) => {
         event.preventDefault();
         const form = event.target;
@@ -670,14 +700,71 @@
             `Message marked as ${isRead ? "read" : "unread"}`,
             "success"
           );
-          // The onSnapshot listener will handle the UI update
         } catch (e) {
           showToast("Failed to update message status.", "error");
           console.error("Message Status Update Error:", e);
         }
       };
 
-      // --- Render Helpers (Header/Footer/Cards already exist) ---
+      // --- NEW: Review Logic ---
+      const handleAddReview = async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const productId = form.productId.value;
+        const rating = parseInt(form.rating.value);
+        const comment = form.comment.value;
+        const mediaUrl = form.mediaUrl.value; // Simplified media upload
+
+        if (!state.user || state.user.role === "anonymous") {
+          return showToast("Please sign in to leave a review.", "error");
+        }
+        if (rating < 1 || rating > 5) {
+          return showToast("Rating must be between 1 and 5.", "error");
+        }
+
+        const reviewData = {
+          productId,
+          userId: state.user.id,
+          userEmail: state.user.email,
+          rating,
+          comment,
+          mediaUrl, // This field represents the uploaded photo/video/sticker URL
+          isApproved: false, // Reviews start as unapproved for moderation
+          createdAt: serverTimestamp(),
+        };
+
+        try {
+          await addDoc(collection(state.db, PUBLIC_REVIEWS_PATH), reviewData);
+          showToast(
+            "Review submitted successfully! It will appear after moderation.",
+            "success"
+          );
+          closeModal();
+        } catch (e) {
+          showToast("Failed to submit review. Try again.", "error");
+          console.error("Review Submission Error:", e);
+        }
+      };
+
+      const updateReviewStatus = async (reviewId, newStatus) => {
+        if (state.user?.role !== "admin" || !state.db) {
+          return showToast("Permission denied.", "error");
+        }
+
+        try {
+          const reviewRef = doc(state.db, PUBLIC_REVIEWS_PATH, reviewId);
+          await updateDoc(reviewRef, { isApproved: newStatus });
+          showToast(
+            `Review ${reviewId.substring(0, 8)} status updated.`,
+            "success"
+          );
+        } catch (e) {
+          showToast("Failed to update review status.", "error");
+          console.error("Review Status Update Error:", e);
+        }
+      };
+
+      // --- Render Helpers ---
 
       const renderHeader = () => {
         const { user, cartItems } = state;
@@ -732,7 +819,7 @@
       };
 
       const renderFooter = () => {
-        // Footer implementation (mostly links, already using window.app.navigate)
+        // Footer implementation remains the same
         const renderCollapsibleContactList = (title, icon, items, type) => {
           const getHref = (item) => {
             if (type === "email") return `mailto:${item}`;
@@ -742,26 +829,26 @@
             return "#";
           };
           return `
-                  <div class="space-y-2">
-                      <button onclick="this.nextElementSibling.classList.toggle('hidden'); this.querySelector('i:last-child').classList.toggle('rotate-180')" class="flex items-center w-full text-left py-1 hover:text-amber-400 transition">
-                          <i class="fas fa-${icon} mr-3 text-sm"></i>
-                          <span class="font-bold text-sm">${title}</span>
-                          <i class="fas fa-chevron-down ml-auto text-xs opacity-75 transition-transform"></i>
-                      </button>
-                      <ul class="space-y-1 pl-6 transition-all duration-300 ease-in-out border-l border-emerald-700 ml-1 hidden">
-                          ${items
-                            .map(
-                              (item) => `
+                    <div class="space-y-2">
+                        <button onclick="this.nextElementSibling.classList.toggle('hidden'); this.querySelector('i:last-child').classList.toggle('rotate-180')" class="flex items-center w-full text-left py-1 hover:text-amber-400 transition">
+                            <i class="fas fa-${icon} mr-3 text-sm"></i>
+                            <span class="font-bold text-sm">${title}</span>
+                            <i class="fas fa-chevron-down ml-auto text-xs opacity-75 transition-transform"></i>
+                        </button>
+                        <ul class="space-y-1 pl-6 transition-all duration-300 ease-in-out border-l border-emerald-700 ml-1 hidden">
+                            ${items
+                              .map(
+                                (item) => `
                               <li class="text-xs">
                                   <a href="${getHref(
                                     item
                                   )}" class="hover:text-amber-400 transition block break-words" target="_blank" rel="noopener noreferrer">${item}</a>
                               </li>
-                          `
-                            )
-                            .join("")}
-                      </ul>
-                  </div>
+                            `
+                              )
+                              .join("")}
+                        </ul>
+                    </div>
               `;
         };
         const renderSocialIcon = (icon, link) => `
@@ -844,7 +931,7 @@
                               </div>
                           </div>
                       </div>
-                      <div class="text-center text-sm pt-4 border-t border-emerald-800">
+                      <div class="text-center text-sm pt-4 border-t">
                           &copy; ${new Date().getFullYear()} ቤት ለቤት ገበያ (Bet Le Bet Gebeya). All Rights Reserved.
                       </div>
                   </div>
@@ -1049,18 +1136,69 @@
 
       const renderProductDetailPage = () => {
         // ... (Product Detail HTML remains the same)
-        const { products, pageParams } = state;
+        const { products, allReviews, pageParams, user } = state;
         const product = products.find((p) => p.id === pageParams.productId);
 
         if (!product) {
           return `<div class="text-center p-12 max-w-xl mx-auto">
-                      <h1 class="text-3xl font-bold text-red-600 mb-4">Product Not Found</h1>
-                      <p class="text-lg text-gray-600">The product you are looking for does not exist or has been discontinued.</p>
-                      <button onclick="window.app.navigate('Home')" class="mt-6 text-emerald-700 hover:text-amber-500 font-semibold transition">
-                          <i class="fas fa-arrow-left mr-2"></i> Back to Shopping
-                      </button>
-                  </div>`;
+                    <h1 class="text-3xl font-bold text-red-600 mb-4">Product Not Found</h1>
+                    <p class="text-lg text-gray-600">The product you are looking for does not exist or has been discontinued.</p>
+                    <button onclick="window.app.navigate('Home')" class="mt-6 text-emerald-700 hover:text-amber-500 font-semibold transition">
+                        <i class="fas fa-arrow-left mr-2"></i> Back to Shopping
+                    </button>
+                </div>`;
         }
+
+        const productReviews = allReviews.filter(
+          (r) => r.productId === product.id && r.isApproved
+        );
+        const reviewCount = productReviews.length;
+        const averageRating =
+          reviewCount > 0
+            ? (
+                productReviews.reduce((sum, r) => sum + r.rating, 0) /
+                reviewCount
+              ).toFixed(1)
+            : "N/A";
+
+        const renderStars = (rating) => {
+          let starsHtml = "";
+          for (let i = 1; i <= 5; i++) {
+            if (i <= rating) {
+              starsHtml += `<i class="fas fa-star text-amber-500"></i>`;
+            } else if (i - 0.5 <= rating) {
+              starsHtml += `<i class="fas fa-star-half-alt text-amber-500"></i>`;
+            } else {
+              starsHtml += `<i class="far fa-star text-amber-500"></i>`;
+            }
+          }
+          return starsHtml;
+        };
+
+        const reviewsHtml = productReviews
+          .sort((a, b) => b.createdAt.toMillis() - a.createdAt.toMillis())
+          .map(
+            (r) => `
+            <div class="border-b pb-4 mb-4">
+                <div class="flex items-center mb-2">
+                    <span class="text-lg mr-2">${renderStars(r.rating)}</span>
+                    <span class="font-semibold text-gray-800">${
+                      r.userEmail
+                    }</span>
+                    <span class="text-xs text-gray-500 ml-auto">${new Date(
+                      r.createdAt.seconds * 1000
+                    ).toLocaleDateString()}</span>
+                </div>
+                <p class="text-gray-700 mb-2">${r.comment}</p>
+                ${
+                  r.mediaUrl
+                    ? `<img src="${r.mediaUrl}" alt="Review Photo" class="w-24 h-24 object-cover rounded-lg mt-2 shadow">`
+                    : ""
+                }
+            </div>
+          `
+          )
+          .join("");
 
         return `
             <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -1079,8 +1217,10 @@
                               product.price
                             )}</p>
                             <div class="flex items-center space-x-2 mb-6 text-sm">
-                                <span class="text-amber-400"><i class="fas fa-star"></i><i class="fas fa-star"></i><i class="fas fa-star"></i><i class="fas fa-star"></i><i class="fas fa-star-half-alt"></i></span>
-                                <span class="text-gray-500">| (4.5/5) 0 Reviews</span>
+                                <span class="text-amber-400">${renderStars(
+                                  averageRating
+                                )}</span>
+                                <span class="text-gray-500">| (${averageRating}/5) ${reviewCount} Reviews</span>
                             </div>
                             <p class="text-gray-700 leading-relaxed mb-6">${
                               product.description
@@ -1117,10 +1257,20 @@
                         </div>
                     </div>
                     <div class="mt-16 pt-8 border-t">
-                        <h2 class="text-3xl font-bold text-emerald-800 mb-6">Customer Reviews</h2>
-                        <div class="bg-gray-50 p-6 rounded-lg text-center">
-                            <p class="text-gray-500 mb-4">Be the first to leave a review for this product!</p>
-                            <button class="bg-amber-400 text-emerald-900 font-bold py-2 px-5 rounded-full hover:bg-amber-300 transition">Write a Review</button>
+                        <h2 class="text-3xl font-bold text-emerald-800 mb-6">Customer Reviews (${reviewCount})</h2>
+                        <button onclick="window.app.openModal('review_form', { productId: '${
+                          product.id
+                        }', productName: '${
+          product.name
+        }' })" class="bg-amber-400 text-emerald-900 font-bold py-2 px-5 rounded-full hover:bg-amber-300 transition mb-6">
+                            <i class="fas fa-pencil-alt mr-2"></i> Write a Review
+                        </button>
+                        <div class="bg-gray-50 p-6 rounded-lg">
+                            ${
+                              reviewCount > 0
+                                ? reviewsHtml
+                                : '<p class="text-gray-500">No approved reviews yet. Be the first!</p>'
+                            }
                         </div>
                     </div>
                 </div>
@@ -1231,7 +1381,7 @@
           (sum, item) => sum + item.price * item.quantity,
           0
         );
-        const deliveryFee = cartItems.length > 0 ? 100.0 : 0.0;
+        const deliveryFee = state.deliveryFee; // NEW: Use managed delivery fee
         const total = subtotal + deliveryFee;
 
         const cartListHtml = cartItems
@@ -1280,7 +1430,6 @@
                   <h1 class="text-4xl font-extrabold text-emerald-700 mb-8">Your Shopping Basket</h1>
                   
                   <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                      <!-- Cart Items List -->
                       <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-lg">
                           ${
                             cartItems.length > 0
@@ -1291,11 +1440,10 @@
                                   <p class="text-xl font-semibold">Your cart is empty.</p>
                                   <button onclick="window.app.navigate('Category', { category: 'All' })" class="mt-4 text-emerald-700 hover:text-amber-500 font-semibold">Start Shopping</button>
                               </div>
-                          `
+                            `
                           }
                       </div>
                       
-                      <!-- Summary Panel -->
                       <div class="lg:col-span-1 bg-gray-50 p-6 rounded-xl shadow-lg h-fit sticky top-24">
                           <h2 class="text-2xl font-bold text-emerald-800 mb-4 border-b pb-2">Order Summary</h2>
                           <div class="space-y-3">
@@ -1306,7 +1454,7 @@
                                 deliveryFee
                               )}</span></div>
                               <div class="flex justify-between pt-3 border-t-2 border-amber-400">
-                                  <span class="text-xl font-bold text-gray-900">Total:</span> 
+                                  <span class="text-xl font-bold text-gray-900">Total:</span>  
                                   <span class="text-xl font-bold text-emerald-700">${formatPrice(
                                     total
                                   )}</span>
@@ -1344,7 +1492,7 @@
           (sum, item) => sum + item.price * item.quantity,
           0
         );
-        const deliveryFee = 100.0;
+        const deliveryFee = state.deliveryFee;
         const total = subtotal + deliveryFee;
 
         const summaryHtml = cartItems
@@ -1363,7 +1511,6 @@
                   <h1 class="text-4xl font-extrabold text-emerald-700 mb-8">Checkout</h1>
                   
                   <form onsubmit="window.app.handlePlaceOrder(event)" class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                      <!-- Shipping/Contact Form -->
                       <div class="lg:col-span-2 bg-white p-8 rounded-xl shadow-lg space-y-6">
                           <h2 class="text-2xl font-bold text-gray-800 border-b pb-3 mb-4">Delivery Details</h2>
                           
@@ -1396,7 +1543,6 @@
                           </div>
                       </div>
                       
-                      <!-- Order Summary -->
                       <div class="lg:col-span-1 bg-gray-50 p-6 rounded-xl shadow-lg h-fit sticky top-24">
                           <h2 class="text-2xl font-bold text-amber-500 mb-4 border-b pb-2">Your Order</h2>
                           <div class="space-y-3">
@@ -1405,7 +1551,7 @@
                                 deliveryFee
                               )}</span></div>
                               <div class="flex justify-between pt-3 border-t-2 border-emerald-700">
-                                  <span class="text-2xl font-bold text-gray-900">Final Total:</span> 
+                                  <span class="text-2xl font-bold text-gray-900">Final Total:</span>  
                                   <span class="text-2xl font-bold text-amber-500">${formatPrice(
                                     total
                                   )}</span>
@@ -1458,39 +1604,42 @@
                 ? "bg-red-100 text-red-700"
                 : "bg-yellow-100 text-yellow-700";
             return `
-                  <div class="bg-white p-6 rounded-lg shadow border-l-4 border-emerald-500">
-                      <div class="flex justify-between items-start mb-4 border-b pb-2">
-                          <div>
-                              <p class="text-sm text-gray-500">Order ID: <strong class="text-gray-800">${order.id.substring(
-                                0,
-                                8
-                              )}...</strong></p>
-                              <p class="text-sm text-gray-500">Date: ${
-                                order.createdAt
-                                  ? new Date(
-                                      order.createdAt.seconds * 1000
-                                    ).toLocaleDateString()
-                                  : "N/A"
-                              }</p>
-                          </div>
-                          <span class="px-3 py-1 text-sm font-semibold rounded-full ${statusClass}">${
+                <div class="bg-white p-6 rounded-lg shadow border-l-4 border-emerald-500">
+                    <div class="flex justify-between items-start mb-4 border-b pb-2">
+                        <div>
+                            <p class="text-sm text-gray-500">Order ID: <strong class="text-gray-800">${order.id.substring(
+                              0,
+                              8
+                            )}...</strong></p>
+                            <p class="text-sm text-gray-500">Date: ${
+                              order.createdAt
+                                ? new Date(
+                                    order.createdAt.seconds * 1000
+                                  ).toLocaleDateString()
+                                : "N/A"
+                            }</p>
+                        </div>
+                        <span class="px-3 py-1 text-sm font-semibold rounded-full ${statusClass}">${
               order.status
             }</span>
-                      </div>
-                      <p class="font-bold text-lg text-emerald-700 mb-2">Total: ${formatPrice(
-                        order.totalAmount
-                      )}</p>
-                      <p class="text-sm text-gray-600">Shipping to: ${
-                        order.shippingAddress
-                      }</p>
-                      
-                      <button onclick="window.app.openModal('message', {title: 'Order Details', body: window.app.renderOrderItemsDetail(${JSON.stringify(
-                        order.items
-                      )})})" class="mt-4 text-amber-500 hover:text-amber-600 text-sm font-semibold">View Items (${
+                    </div>
+                    <p class="font-bold text-lg text-emerald-700 mb-2">Total: ${formatPrice(
+                      order.totalAmount
+                    )}</p>
+                    <p class="text-sm text-gray-600">Shipping to: ${
+                      order.shippingAddress
+                    }</p>
+                    
+                    <button onclick="window.app.openModal('order_detail', ${JSON.stringify(
+                      order.items
+                    ).replace(
+                      /"/g,
+                      "&quot;"
+                    )})" class="mt-4 text-amber-500 hover:text-amber-600 text-sm font-semibold">View Items (${
               order.items.length
             })</button>
-                  </div>
-              `;
+                </div>
+            `;
           })
           .join("");
 
@@ -1513,7 +1662,7 @@
                                   Start Your First Order
                               </button>
                           </div>
-                      `
+                        `
                       }
                   </div>
               </div>
@@ -1521,7 +1670,11 @@
       };
 
       const renderOrderItemsDetail = (items) => {
-        return `<div class="space-y-3">${items
+        const itemArray =
+          typeof items === "string"
+            ? JSON.parse(items.replace(/&quot;/g, '"'))
+            : items;
+        return `<div class="space-y-3">${itemArray
           .map(
             (item) => `
               <div class="flex justify-between text-sm border-b pb-1">
@@ -1591,6 +1744,79 @@
           `;
       };
 
+      const renderReviewsTab = () => {
+        const { allReviews } = state;
+
+        const reviewsHtml = allReviews
+          .sort((a, b) => b.createdAt.toMillis() - a.createdAt.toMillis())
+          .map((r) => {
+            const statusClass = r.isApproved ? "bg-green-500" : "bg-red-500";
+            const dateString = r.createdAt
+              ? new Date(r.createdAt.seconds * 1000).toLocaleDateString()
+              : "N/A";
+
+            const toggleStatusText = r.isApproved ? "Unapprove" : "Approve";
+            const toggleStatusIcon = r.isApproved
+              ? "fa-times-circle"
+              : "fa-check-circle";
+
+            return `
+                <tr class="border-b hover:bg-gray-50">
+                    <td class="px-6 py-4">${dateString}</td>
+                    <td class="px-6 py-4 font-semibold">${r.userEmail}</td>
+                    <td class="px-6 py-4">${r.rating} / 5</td>
+                    <td class="px-6 py-4 max-w-xs truncate">${r.comment}</td>
+                    <td class="px-6 py-4 max-w-xs truncate">${
+                      r.mediaUrl ? "Yes" : "No"
+                    }</td>
+                    <td class="px-6 py-4">
+                        <span class="text-white px-3 py-1 text-xs font-bold rounded-full ${statusClass}">
+                            ${r.isApproved ? "Approved" : "Pending"}
+                        </span>
+                    </td>
+                    <td class="px-6 py-4 space-x-2 whitespace-nowrap">
+                        <button onclick="window.app.openModal('message', {
+                            title: 'Full Review from ${r.userEmail}', 
+                            body: \`Rating: ${r.rating}/5<br>Comment: ${
+              r.comment
+            }<br>${
+              r.mediaUrl
+                ? `<img src="${r.mediaUrl}" alt="Review Media" class='w-32 h-32 object-cover mt-2'>`
+                : ""
+            }\`,
+                            confirmAction: false
+                        })" class="text-blue-600 hover:text-blue-800"><i class="fas fa-eye"></i> View</button>
+                        <button onclick="window.app.updateReviewStatus('${
+                          r.id
+                        }', ${!r.isApproved})" class="text-emerald-600 hover:text-emerald-800">
+                            <i class="fas ${toggleStatusIcon}"></i> ${toggleStatusText}
+                        </button>
+                    </td>
+                </tr>
+            `;
+          })
+          .join("");
+
+        return `
+            <div class="overflow-x-auto bg-white rounded-xl shadow-lg">
+                <table class="min-w-full text-left text-sm font-light">
+                    <thead class="border-b bg-gray-100 font-medium">
+                        <tr>
+                            <th scope="col" class="px-6 py-4">Date</th>
+                            <th scope="col" class="px-6 py-4">Email</th>
+                            <th scope="col" class="px-6 py-4">Rating</th>
+                            <th scope="col" class="px-6 py-4">Comment</th>
+                            <th scope="col" class="px-6 py-4">Media</th>
+                            <th scope="col" class="px-6 py-4">Status</th>
+                            <th scope="col" class="px-6 py-4">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>${reviewsHtml}</tbody>
+                </table>
+            </div>
+        `;
+      };
+
       const renderMessagesTab = () => {
         const { allMessages } = state;
 
@@ -1617,59 +1843,66 @@
             const fullMessageBody = `Email: ${m.email}<br>Date: ${dateString}<hr class='my-2'><p class='whitespace-pre-wrap'>${escapedMessage}</p>`;
 
             return `
-                  <tr class="border-b hover:bg-emerald-50 ${rowClass}">
-                      <td class="px-6 py-4">${dateString}</td>
-                      <td class="px-6 py-4">${m.name}</td>
-                      <td class="px-6 py-4">${m.email}</td>
-                      <td class="px-6 py-4 max-w-xs truncate">${m.message}</td>
-                      <td class="px-6 py-4">
-                          <span class="text-white px-3 py-1 text-xs font-bold rounded-full ${
-                            m.isRead ? "bg-green-500" : "bg-red-500"
-                          }">
-                              ${m.isRead ? "Read" : "New"}
-                          </span>
-                      </td>
-                      <td class="px-6 py-4 space-x-2 whitespace-nowrap">
-                          <button onclick="window.app.openModal('message', {
-                              title: 'Customer Message from ${m.name}', 
-                              body: \`${fullMessageBody}\`,
-                              confirmAction: false
-                          })" class="text-blue-600 hover:text-blue-800"><i class="fas fa-eye"></i> View</button>
-                          <button onclick="window.app.updateMessageStatus('${
-                            m.id
-                          }', ${!m.isRead})" class="text-emerald-600 hover:text-emerald-800">
-                              <i class="fas ${
-                                m.isRead ? "fa-envelope-open" : "fa-envelope"
-                              }"></i> Mark ${m.isRead ? "Unread" : "Read"}
-                          </button>
-                      </td>
-                  </tr>
-              `;
+                <tr class="border-b hover:bg-emerald-50 ${rowClass}">
+                    <td class="px-6 py-4">${dateString}</td>
+                    <td class="px-6 py-4">${m.name}</td>
+                    <td class="px-6 py-4">${m.email}</td>
+                    <td class="px-6 py-4 max-w-xs truncate">${m.message}</td>
+                    <td class="px-6 py-4">
+                        <span class="text-white px-3 py-1 text-xs font-bold rounded-full ${
+                          m.isRead ? "bg-green-500" : "bg-red-500"
+                        }">
+                            ${m.isRead ? "Read" : "New"}
+                        </span>
+                    </td>
+                    <td class="px-6 py-4 space-x-2 whitespace-nowrap">
+                        <button onclick="window.app.openModal('message', {
+                            title: 'Customer Message from ${m.name}', 
+                            body: \`${fullMessageBody}\`,
+                            confirmAction: false
+                        })" class="text-blue-600 hover:text-blue-800"><i class="fas fa-eye"></i> View</button>
+                        <button onclick="window.app.updateMessageStatus('${
+                          m.id
+                        }', ${!m.isRead})" class="text-emerald-600 hover:text-emerald-800">
+                            <i class="fas ${
+                              m.isRead ? "fa-envelope-open" : "fa-envelope"
+                            }"></i> Mark ${m.isRead ? "Unread" : "Read"}
+                        </button>
+                    </td>
+                </tr>
+            `;
           })
           .join("");
 
         return `
-              <div class="overflow-x-auto bg-white rounded-xl shadow-lg">
-                  <table class="min-w-full text-left text-sm font-light">
-                      <thead class="border-b bg-gray-100 font-medium">
-                          <tr>
-                              <th scope="col" class="px-6 py-4">Date</th>
-                              <th scope="col" class="px-6 py-4">Sender Name</th>
-                              <th scope="col" class="px-6 py-4">Email</th>
-                              <th scope="col" class="px-6 py-4">Message Snippet</th>
-                              <th scope="col" class="px-6 py-4">Status</th>
-                              <th scope="col" class="px-6 py-4">Actions</th>
-                          </tr>
-                      </thead>
-                      <tbody>${messagesHtml}</tbody>
-                  </table>
-              </div>
-          `;
+            <div class="overflow-x-auto bg-white rounded-xl shadow-lg">
+                <table class="min-w-full text-left text-sm font-light">
+                    <thead class="border-b bg-gray-100 font-medium">
+                        <tr>
+                            <th scope="col" class="px-6 py-4">Date</th>
+                            <th scope="col" class="px-6 py-4">Sender Name</th>
+                            <th scope="col" class="px-6 py-4">Email</th>
+                            <th scope="col" class="px-6 py-4">Message Snippet</th>
+                            <th scope="col" class="px-6 py-4">Status</th>
+                            <th scope="col" class="px-6 py-4">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>${messagesHtml}</tbody>
+                </table>
+            </div>
+        `;
       };
 
       const renderAdminDashboard = () => {
-        const { user, products, allOrders, allUsers, allMessages, adminTab } =
-          state;
+        const {
+          user,
+          products,
+          allOrders,
+          allUsers,
+          allMessages,
+          adminTab,
+          deliveryFee,
+        } = state;
 
         if (user?.role !== "admin") {
           return `<div class="text-center p-12 max-w-xl mx-auto bg-red-50 rounded-xl shadow-lg">
@@ -1722,6 +1955,20 @@
                     <button onclick="window.app.openModal('product_form', null)" class="bg-amber-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-amber-600 transition shadow-md">
                         <i class="fas fa-plus-circle mr-2"></i> Add New Product
                     </button>
+                    
+                    <div class="bg-blue-50 p-4 rounded-xl shadow border border-blue-200">
+                        <h3 class="text-lg font-bold text-blue-800 mb-2">Delivery Fee Management</h3>
+                        <form onsubmit="window.app.updateDeliveryFee(event)" class="flex space-x-3 items-end">
+                            <div class="flex-grow">
+                                <label for="deliveryFee" class="block text-sm font-medium text-gray-700">Current Fee: ${formatPrice(
+                                  deliveryFee
+                                )}</label>
+                                <input type="number" id="deliveryFee" name="deliveryFee" value="${deliveryFee}" step="0.01" required class="mt-1 w-full p-2 border rounded-lg">
+                            </div>
+                            <button type="submit" class="bg-blue-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-700 transition">Update Fee</button>
+                        </form>
+                    </div>
+
                     <div class="overflow-x-auto bg-white rounded-xl shadow-lg">
                         <table class="min-w-full text-left text-sm font-light">
                             <thead class="border-b bg-gray-100 font-medium">
@@ -1769,7 +2016,7 @@
               }</span></td>
                         <td class="px-6 py-4">
                             <button onclick="window.app.openModal('order_detail', ${JSON.stringify(
-                              order
+                              order.items
                             ).replace(
                               /"/g,
                               "&quot;"
@@ -1812,6 +2059,7 @@
         };
 
         const renderUsersTab = () => {
+          // ... (Users Tab HTML remains the same)
           const usersHtml = allUsers
             .map(
               (u) => `
@@ -1857,6 +2105,8 @@
               return renderUsersTab();
             case "messages":
               return renderMessagesTab();
+            case "reviews":
+              return renderReviewsTab(); // NEW: Reviews Tab
             default:
               return renderProductsTab();
           }
@@ -1869,7 +2119,7 @@
                 <h1 class="text-4xl font-extrabold text-emerald-700 mb-8">Admin Dashboard</h1>
                 
                 <div class="bg-white p-6 rounded-xl shadow-2xl">
-                    <div class="flex border-b border-gray-200 mb-6">
+                    <div class="flex border-b border-gray-200 mb-6 flex-wrap">
                         <button onclick="window.app.setAdminTab('products')" class="px-4 py-2 font-semibold text-gray-600 transition ${
                           adminTab === "products"
                             ? "tab-active border-b-2"
@@ -1897,12 +2147,27 @@
                               allUsers.length
                             })
                         </button>
-                        <button onclick="window.app.setAdminTab('messages')" class="px-4 py-2 font-semibold text-gray-600 transition ${
+                        <button onclick="window.app.setAdminTab('messages')" class="px-4 py-2 font-semibold text-gray-600 transition relative ${
                           adminTab === "messages"
                             ? "tab-active border-b-2"
                             : "hover:text-emerald-700"
                         }">
-                            <i class="fas fa-envelope mr-1"></i> Messages (${unreadMessagesCount} New)
+                            <i class="fas fa-envelope mr-1"></i> Messages
+                             ${
+                               unreadMessagesCount > 0
+                                 ? `<span class="absolute -top-1 -right-1 bg-red-500 text-white text-xs w-4 h-4 rounded-full flex items-center justify-center">${unreadMessagesCount}</span>`
+                                 : ""
+                             }
+                        </button>
+                        <button onclick="window.app.setAdminTab('reviews')" class="px-4 py-2 font-semibold text-gray-600 transition ${
+                          adminTab === "reviews"
+                            ? "tab-active border-b-2"
+                            : "hover:text-emerald-700"
+                        }">
+                            <i class="fas fa-star-half-alt mr-1"></i> Reviews (${
+                              state.allReviews.filter((r) => !r.isApproved)
+                                .length
+                            } Pending)
                         </button>
                     </div>
                     
@@ -1954,6 +2219,7 @@
       };
 
       const renderProductFormModal = () => {
+        // Product form logic remains the same (now working via handleSaveProduct/handleDeleteProduct)
         const product = state.modalContent.data || {};
         const isEdit = !!product.id;
         const title = isEdit ? "Edit Product" : "Add New Product";
@@ -2049,85 +2315,120 @@
           `;
       };
 
-      const renderMessageModal = () => {
-        const { title, body, confirmAction } = state.modalContent.data;
+      // NEW: Review Submission Modal
+      const renderReviewFormModal = () => {
+        const { productId, productName } = state.modalContent.data || {};
 
-        const handleConfirm = () => {
-          if (typeof confirmAction === "function") {
-            confirmAction(); // Execute the action passed via data
-          } else if (confirmAction) {
-            // Special case for order detail display
-            closeModal();
+        // Simple 5-star rating input
+        const renderRatingInput = () => {
+          let html = `<div class="flex space-x-1 text-2xl mb-4">`;
+          for (let i = 5; i >= 1; i--) {
+            html += `
+              <label for="rating-${i}" class="cursor-pointer text-gray-300 hover:text-amber-400 transition-colors">
+                <input type="radio" id="rating-${i}" name="rating" value="${i}" class="hidden" ${
+              i === 5 ? "checked" : ""
+            }>
+                <i class="fas fa-star"></i>
+              </label>
+            `;
           }
+          html += `</div>`;
+          return html;
         };
 
         return `
-              <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-sm mx-4 text-center">
-                  <h2 class="text-2xl font-bold text-emerald-700 mb-4">${title}</h2>
-                  <div class="text-gray-600 mb-6 text-left">${body}</div>
-                  
-                  <div class="flex justify-center space-x-4">
-                      <button onclick="window.app.closeModal()" class="px-4 py-2 bg-gray-200 text-gray-700 font-bold rounded-lg hover:bg-gray-300 transition">
-                          ${confirmAction ? "Cancel" : "Close"}
-                      </button>
-                      ${
-                        confirmAction
-                          ? `
-                          <button onclick="(${handleConfirm.toString()})()" class="px-4 py-2 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 transition shadow-md">
-                              Confirm
-                          </button>
-                      `
-                          : ""
-                      }
-                  </div>
-              </div>
-          `;
+            <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-lg mx-4">
+                <h2 class="text-3xl font-bold text-emerald-700 mb-2">Write a Review</h2>
+                <h3 class="text-xl text-gray-600 mb-6 border-b pb-2">Product: ${productName}</h3>
+                
+                <form onsubmit="window.app.handleAddReview(event)" class="space-y-4">
+                    <input type="hidden" name="productId" value="${productId}">
+                    
+                    <div class="text-center">
+                        <label class="block text-lg font-medium text-gray-700 mb-2">Your Rating</label>
+                        ${renderRatingInput()}
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Your Comment / Emojis / Stickers</label>
+                        <textarea name="comment" rows="4" required class="mt-1 w-full p-3 border rounded-lg focus:ring-amber-500 focus:border-amber-500" placeholder="Share your experience (e.g., 'Excellent quality! 💯👏')"></textarea>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Photo / Video URL (Optional)</label>
+                        <input type="url" name="mediaUrl" placeholder="Paste link to photo, video, or GIF here" class="mt-1 w-full p-3 border rounded-lg">
+                        <p class="text-xs text-gray-500 mt-1">In a real application, this would be an upload button for local files (images/videos).</p>
+                    </div>
+                    
+                    <div class="flex justify-end space-x-3 pt-4">
+                        <button type="button" onclick="window.app.closeModal()" class="px-4 py-2 bg-gray-200 text-gray-700 font-bold rounded-lg hover:bg-gray-300 transition">
+                            Cancel
+                        </button>
+                        <button type="submit" class="px-4 py-2 bg-amber-500 text-white font-bold rounded-lg hover:bg-amber-600 transition shadow-md">
+                            Submit Review
+                        </button>
+                    </div>
+                </form>
+            </div>
+        `;
       };
 
-      const renderOrderDetailModal = () => {
-        const order = state.modalContent.data;
-        if (!order) return "";
-        const itemsHtml = order.items
-          .map(
-            (item) => `
-              <div class="flex justify-between text-sm border-b pb-1">
-                  <span>${item.name} x ${item.quantity}</span>
-                  <span class="font-semibold">${formatPrice(
-                    item.price * item.quantity
-                  )}</span>
-              </div>
-          `
-          )
-          .join("");
+      // *** CORRECTED renderMessageModal FIX (Handles Action ID) ***
+      const renderMessageModal = () => {
+        const { title, body, confirmActionId } = state.modalContent.data; // Now looking for an ID
+
+        const isActionable = !!confirmActionId;
+
+        const executableString = isActionable
+          ? `window.app.executePendingAction('${confirmActionId}')`
+          : "";
 
         return `
-              <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md mx-4">
-                  <h2 class="text-3xl font-bold text-emerald-700 mb-6 border-b pb-2">Order #${order.id.substring(
-                    0,
-                    8
-                  )}</h2>
-                  <div class="space-y-4 text-gray-700">
-                      <p><strong>Customer:</strong> ${order.userEmail}</p>
-                      <p><strong>Total Amount:</strong> <span class="text-amber-500 font-bold">${formatPrice(
-                        order.totalAmount
-                      )}</span></p>
-                      <p><strong>Status:</strong> <span class="font-bold">${
-                        order.status
-                      }</span></p>
-                      <p><strong>Address:</strong> ${order.shippingAddress}</p>
-                      <p><strong>Phone:</strong> ${order.contactPhone}</p>
-                      <div class="pt-4 border-t">
-                          <h3 class="font-bold text-lg mb-2">Items Ordered:</h3>
-                          ${itemsHtml}
-                      </div>
-                  </div>
-                  <div class="flex justify-end space-x-3 pt-6">
-                      <button type="button" onclick="window.app.closeModal()" class="px-4 py-2 bg-gray-200 text-gray-700 font-bold rounded-lg hover:bg-gray-300 transition">
-                          Close
-                      </button>
-                  </div>
-              </div>
-          `;
+            <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-sm mx-4 text-center">
+                <h2 class="text-2xl font-bold text-emerald-700 mb-4">${title}</h2>
+                <div class="text-gray-600 mb-6 text-left">${body}</div>
+                
+                <div class="flex justify-center space-x-4">
+                    <button onclick="window.app.closeModal()" class="px-4 py-2 bg-gray-200 text-gray-700 font-bold rounded-lg hover:bg-gray-300 transition">
+                        ${isActionable ? "Cancel" : "Close"}
+                    </button>
+                    ${
+                      isActionable
+                        ? `
+                        <button onclick="${executableString}" class="px-4 py-2 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 transition shadow-md">
+                            Confirm
+                        </button>
+                    `
+                        : ""
+                    }
+                </div>
+            </div>
+        `;
+      };
+      // *** END CORRECTED renderMessageModal FIX ***
+
+      const renderOrderDetailModal = () => {
+        // This modal is now only used for rendering order items detail on the profile page
+        // The admin uses a simpler, un-nested renderMessageModal with full order info.
+        const items = state.modalContent.data;
+        const itemsHtml = renderOrderItemsDetail(items);
+
+        return `
+            <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md mx-4">
+                <h2 class="text-3xl font-bold text-emerald-700 mb-6 border-b pb-2">Order Items</h2>
+                <div class="space-y-4 text-gray-700">
+                    <div class="pt-4">
+                        <h3 class="font-bold text-lg mb-2">Items Ordered:</h3>
+                        ${itemsHtml}
+                    </div>
+                </div>
+                <div class="flex justify-end space-x-3 pt-6">
+                    <button type="button" onclick="window.app.closeModal()" class="px-4 py-2 bg-gray-200 text-gray-700 font-bold rounded-lg hover:bg-gray-300 transition">
+                        Close
+                    </button>
+                </div>
+            </div>
+        `;
       };
 
       const renderModal = () => {
@@ -2141,6 +2442,9 @@
             break;
           case "product_form":
             modalContentHtml = renderProductFormModal();
+            break;
+          case "review_form": // NEW
+            modalContentHtml = renderReviewFormModal();
             break;
           case "message":
             modalContentHtml = renderMessageModal();
@@ -2159,7 +2463,7 @@
           `;
       };
 
-      // --- Admin Specific Firestore Actions (For Demo) ---
+      // --- Admin Specific Firestore Actions ---
 
       const updateOrderStatus = async (orderId, newStatus) => {
         if (state.user?.role !== "admin" || !state.db) {
@@ -2167,14 +2471,27 @@
         }
 
         try {
-          // Note: This only updates the PUBLIC_ORDERS_PATH. In a full app, you'd need to update the user's order too.
-          const orderRef = doc(state.db, PUBLIC_ORDERS_PATH, orderId);
-          await updateDoc(orderRef, { status: newStatus });
+          // 1. Update order in public collection (for admin view)
+          const publicOrderRef = doc(state.db, PUBLIC_ORDERS_PATH, orderId);
+          await updateDoc(publicOrderRef, { status: newStatus });
+
+          // 2. Find the user ID from the order to update their personal order record
+          const orderSnapshot = await getDoc(publicOrderRef);
+          const userId = orderSnapshot.data()?.userId;
+
+          if (userId) {
+            const userOrderRef = doc(
+              state.db,
+              USER_ORDERS_COLLECTION_PATH(userId),
+              orderId
+            );
+            await updateDoc(userOrderRef, { status: newStatus });
+          }
+
           showToast(
             `Order ${orderId.substring(0, 8)} status updated to ${newStatus}`,
             "success"
           );
-          // The onSnapshot listener will handle the UI update
         } catch (e) {
           showToast("Failed to update order status.", "error");
           console.error("Order Status Update Error:", e);
@@ -2184,7 +2501,7 @@
       // --- Core Render Logic ---
 
       const renderPageContent = () => {
-        if (state.loading)
+        if (state.loading || !state.isAuthReady)
           return `<div class="flex-grow flex justify-center items-center h-full"><div class="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-700"></div><p class="ml-4 text-emerald-700 font-semibold text-lg">Loading Gebeya...</p></div>`;
         switch (state.currentPage) {
           case "Home":
@@ -2221,6 +2538,32 @@
         if (modalContainer) {
           modalContainer.innerHTML = renderModal();
         }
+
+        // Custom DOM updates for the new review rating input
+        if (state.isModalOpen && state.modalContent.type === "review_form") {
+          const ratingInputs = document.querySelectorAll(
+            'input[name="rating"]'
+          );
+          ratingInputs.forEach((input) => {
+            input.addEventListener("change", () => {
+              const stars = input.closest(".flex").querySelectorAll(".fa-star");
+              stars.forEach((star) =>
+                star.classList.remove("text-amber-400", "fas", "far")
+              );
+              for (let i = 0; i < input.value; i++) {
+                stars[i].classList.add("fas", "text-amber-400");
+              }
+              for (let i = input.value; i < 5; i++) {
+                stars[i].classList.add("far", "text-gray-300");
+              }
+            });
+            // Initial state update
+            if (input.checked) {
+              const event = new Event("change");
+              input.dispatchEvent(event);
+            }
+          });
+        }
       };
 
       window.app = {
@@ -2232,23 +2575,27 @@
         updateCartItem,
         removeFromCart,
         handleAuthSubmit,
-        handleSaveProduct,
-        handleDeleteProduct,
+        handleSaveProduct, // Working
+        handleDeleteProduct, // Working FIX
+        executePendingAction, // NEW FIX
         setAdminTab,
         setSearchTerm,
         setPriceRange,
         handlePlaceOrder,
         showToast,
-        updateOrderStatus,
+        updateOrderStatus, // Working
         renderOrderItemsDetail,
         handleContactSubmit,
         updateMessageStatus,
+        handleAddReview, // NEW
+        updateReviewStatus, // NEW
+        updateDeliveryFee, // NEW
+        _pendingActions: {}, // NEW: Storage for actions waiting for modal confirmation
       };
 
       // --- Firebase Initialization and Listeners ---
 
       const initializeAndListen = async () => {
-        // Use explicit configuration
         if (
           !firebaseConfig ||
           Object.keys(firebaseConfig).length === 0 ||
@@ -2272,6 +2619,13 @@
           setState({ db, auth });
 
           const adminEmails = [ADMIN_EMAIL];
+
+          // --- Settings Listener (NEW) ---
+          onSnapshot(doc(db, PUBLIC_SETTINGS_PATH, "general"), (docSnap) => {
+            if (docSnap.exists()) {
+              setState({ deliveryFee: docSnap.data().deliveryFee || 100.0 });
+            }
+          });
 
           // --- Auth State Listener ---
           onAuthStateChanged(auth, async (currentUser) => {
@@ -2374,7 +2728,7 @@
                 (error) => console.error("Admin Users Listener Error:", error)
               );
 
-              // NEW: Admin All Messages Listener
+              // Admin All Messages Listener
               onSnapshot(
                 collection(db, PUBLIC_MESSAGES_PATH),
                 (snapshot) => {
@@ -2387,8 +2741,26 @@
                 (error) =>
                   console.error("Admin Messages Listener Error:", error)
               );
+
+              // NEW: Admin All Reviews Listener
+              onSnapshot(
+                collection(db, PUBLIC_REVIEWS_PATH),
+                (snapshot) => {
+                  const fetchedReviews = snapshot.docs.map((d) => ({
+                    id: d.id,
+                    ...d.data(),
+                  }));
+                  setState({ allReviews: fetchedReviews });
+                },
+                (error) => console.error("Admin Reviews Listener Error:", error)
+              );
             } else {
-              setState({ allOrders: [], allUsers: [], allMessages: [] });
+              setState({
+                allOrders: [],
+                allUsers: [],
+                allMessages: [],
+                allReviews: [],
+              });
             }
           });
 
