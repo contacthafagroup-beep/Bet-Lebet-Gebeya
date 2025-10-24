@@ -129,6 +129,7 @@
         getDocs,
         serverTimestamp,
         setLogLevel,
+        where, // MODIFIED: Added 'where' for querying
       } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
       // Set logging level for detailed Firebase console output
@@ -155,7 +156,6 @@
         priceRange: 5000,
         toast: null, // { message: string, type: 'success' | 'error' | 'info' }
         userOrders: [], // Current user's orders
-        deliveryFee: 100.0, // NEW: Manageable Delivery Fee
       };
 
       // --- START: USER'S REAL FIREBASE CONFIGURATION ---
@@ -174,11 +174,11 @@
       const PUBLIC_ORDERS_PATH = `artifacts/${appId}/public/data/orders`;
       const USERS_COLLECTION_PATH = `artifacts/${appId}/public/data/users`;
       const PUBLIC_MESSAGES_PATH = `artifacts/${appId}/public/data/messages`;
-      const PUBLIC_REVIEWS_PATH = `artifacts/${appId}/public/data/reviews`; // NEW
-      const PUBLIC_SETTINGS_PATH = `artifacts/${appId}/public/data/settings`; // NEW
+      const PUBLIC_REVIEWS_PATH = `artifacts/${appId}/public/data/reviews`;
 
       const USER_CART_PATH = (userId) =>
         `artifacts/${appId}/users/${userId}/cart/items`;
+      // MODIFIED: This path is no longer used for reads, only for targeting in old code
       const USER_ORDERS_COLLECTION_PATH = (userId) =>
         `artifacts/${appId}/users/${userId}/orders`;
 
@@ -187,6 +187,7 @@
           id: "p1",
           name: "Fresh Avocado (Ahadu Farms)",
           price: 45.0,
+          delivery_fee: 10.0,
           stock_quantity: 50,
           category: "Fruits",
           description: "Creamy Hass avocados. Perfect for salads and dips.",
@@ -196,6 +197,7 @@
           id: "p2",
           name: "Organic Teff Flour (1kg)",
           price: 90.0,
+          delivery_fee: 25.0,
           stock_quantity: 200,
           category: "Grains & Spices",
           description:
@@ -207,6 +209,7 @@
           id: "p3",
           name: "Local Honey (1L Jar)",
           price: 350.0,
+          delivery_fee: 30.0,
           stock_quantity: 12,
           category: "Honey",
           description: "Pure, unfiltered honey from local Ethiopian blossoms.",
@@ -217,6 +220,7 @@
           id: "p4",
           name: "Fresh Eggs (1 Dozen)",
           price: 150.0,
+          delivery_fee: 15.0,
           stock_quantity: 5,
           category: "Poultry & Dairy",
           description: "Free-range chicken eggs. Limited stock!",
@@ -386,6 +390,7 @@
             name: product.name,
             price: product.price,
             image_url: product.image_url,
+            delivery_fee: product.delivery_fee || 0, // MODIFIED: Add delivery fee
           });
         }
 
@@ -468,16 +473,21 @@
           }
         }
 
+        // MODIFIED: Calculate totals based on per-item delivery fees
         const subtotal = state.cartItems.reduce(
           (sum, item) => sum + item.price * item.quantity,
           0
         );
-        const totalAmount = subtotal + state.deliveryFee;
+        const totalDeliveryFee = state.cartItems.reduce(
+          (sum, item) => sum + (item.delivery_fee || 0) * item.quantity,
+          0
+        );
+        const totalAmount = subtotal + totalDeliveryFee;
 
         const orderData = {
           userId: state.user.id,
           userEmail: state.user.email,
-          items: state.cartItems,
+          items: state.cartItems, // This now includes delivery_fee per item
           totalAmount: totalAmount,
           shippingAddress: address,
           contactPhone: phone,
@@ -486,20 +496,15 @@
         };
 
         try {
-          // 1. Create order in public collection (for admin view)
+          // MODIFIED: Only create ONE order in the public collection
           const newOrderRef = await addDoc(
             collection(state.db, PUBLIC_ORDERS_PATH),
             orderData
           );
-          // 2. Create order in user-specific collection (for user profile view)
-          await setDoc(
-            doc(
-              state.db,
-              USER_ORDERS_COLLECTION_PATH(state.user.id),
-              newOrderRef.id
-            ),
-            orderData
-          );
+
+          // MODIFIED: REMOVED the second write to the user-specific collection
+          // This was causing the permissions error on update.
+
           // 3. Clear the user's cart
           await setDoc(getCartRef(), { items: [] });
 
@@ -525,32 +530,6 @@
 
       // --- Admin/Product/Fee Logic ---
 
-      // NEW: Admin Delivery Fee Management
-      const updateDeliveryFee = async (event) => {
-        event.preventDefault();
-        const form = event.target;
-        const newFee = parseFloat(form.deliveryFee.value);
-
-        if (state.user?.role !== "admin" || !state.db || isNaN(newFee)) {
-          return showToast("Permission denied or invalid fee.", "error");
-        }
-
-        try {
-          await setDoc(
-            doc(state.db, PUBLIC_SETTINGS_PATH, "general"),
-            { deliveryFee: newFee },
-            { merge: true }
-          );
-          showToast(
-            `Delivery fee updated to ${formatPrice(newFee)}`,
-            "success"
-          );
-        } catch (e) {
-          showToast("Failed to update delivery fee.", "error");
-          console.error("Fee Update Error:", e);
-        }
-      };
-
       const handleSaveProduct = async (event) => {
         event.preventDefault();
         const form = event.target;
@@ -561,6 +540,7 @@
           name: data.get("name"),
           price: parseFloat(data.get("price")),
           stock_quantity: parseInt(data.get("stock_quantity")),
+          delivery_fee: parseFloat(data.get("delivery_fee")) || 0, // MODIFIED
           category: data.get("category"),
           description: data.get("description"),
           image_url:
@@ -574,6 +554,7 @@
           state.user?.role !== "admin" ||
           isNaN(product.price) ||
           isNaN(product.stock_quantity) ||
+          isNaN(product.delivery_fee) || // MODIFIED
           !product.name
         ) {
           return showToast(
@@ -807,15 +788,15 @@
                             ? `
                             <button onclick="window.app.navigate('Profile')" class="p-2 rounded-full hover:bg-emerald-100 text-emerald-700"><i class="fas fa-user-circle text-xl"></i></button>
                             <button onclick="window.app.handleSignOut()" class="hidden sm:inline-block bg-emerald-700 text-white text-sm px-4 py-2 rounded-lg hover:bg-emerald-600">Sign Out</button>
-                        `
+                          `
                             : `
                             <button onclick="window.app.openModal('login')" class="bg-amber-400 text-white text-sm px-4 py-2 rounded-lg hover:bg-amber-500 shadow-md">Sign In</button>
-                        `
+                          `
                         }
                     </div>
                 </div>
             </header>
-        `;
+          `;
       };
 
       const renderFooter = () => {
@@ -829,114 +810,114 @@
             return "#";
           };
           return `
-                    <div class="space-y-2">
-                        <button onclick="this.nextElementSibling.classList.toggle('hidden'); this.querySelector('i:last-child').classList.toggle('rotate-180')" class="flex items-center w-full text-left py-1 hover:text-amber-400 transition">
-                            <i class="fas fa-${icon} mr-3 text-sm"></i>
-                            <span class="font-bold text-sm">${title}</span>
-                            <i class="fas fa-chevron-down ml-auto text-xs opacity-75 transition-transform"></i>
-                        </button>
-                        <ul class="space-y-1 pl-6 transition-all duration-300 ease-in-out border-l border-emerald-700 ml-1 hidden">
-                            ${items
-                              .map(
-                                (item) => `
-                              <li class="text-xs">
-                                  <a href="${getHref(
-                                    item
-                                  )}" class="hover:text-amber-400 transition block break-words" target="_blank" rel="noopener noreferrer">${item}</a>
-                              </li>
-                            `
-                              )
-                              .join("")}
-                        </ul>
-                    </div>
-              `;
+                  <div class="space-y-2">
+                      <button onclick="this.nextElementSibling.classList.toggle('hidden'); this.querySelector('i:last-child').classList.toggle('rotate-180')" class="flex items-center w-full text-left py-1 hover:text-amber-400 transition">
+                          <i class="fas fa-${icon} mr-3 text-sm"></i>
+                          <span class="font-bold text-sm">${title}</span>
+                          <i class="fas fa-chevron-down ml-auto text-xs opacity-75 transition-transform"></i>
+                      </button>
+                      <ul class="space-y-1 pl-6 transition-all duration-300 ease-in-out border-l border-emerald-700 ml-1 hidden">
+                          ${items
+                            .map(
+                              (item) => `
+                            <li class="text-xs">
+                                <a href="${getHref(
+                                  item
+                                )}" class="hover:text-amber-400 transition block break-words" target="_blank" rel="noopener noreferrer">${item}</a>
+                            </li>
+                          `
+                            )
+                            .join("")}
+                      </ul>
+                  </div>
+                `;
         };
         const renderSocialIcon = (icon, link) => `
               <a href="${link}" target="_blank" rel="noopener noreferrer" class="text-gray-400 hover:text-amber-400 transition duration-300 mx-2">
                   <i class="fab fa-${icon} text-xl"></i>
               </a>
-          `;
+            `;
 
         return `
-              <footer class="bg-emerald-900 text-gray-200 mt-12">
-                  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
-                      <div class="grid grid-cols-2 md:grid-cols-4 gap-8 border-b border-emerald-800 pb-8 mb-8">
-                          <div>
-                              <h4 class="text-xl font-bold text-amber-400 mb-4">Quick Links</h4>
-                              <ul class="space-y-2 text-sm">
-                                  <li><button onclick="window.app.navigate('Home')" class="hover:text-amber-400 transition">Home</button></li>
-                                  <li><button onclick="window.app.navigate('Category', { category: 'All' })" class="hover:text-amber-400 transition">Shop All</button></li>
-                                  <li><button onclick="window.app.navigate('About')" class="hover:text-amber-400 transition">Our Mission</button></li>
-                                  <li><button onclick="window.app.navigate('Contact')" class="hover:text-amber-400 transition">Support</button></li>
-                              </ul>
-                          </div>
-                          <div>
-                              <h4 class="text-xl font-bold text-amber-400 mb-4">Contact Hossana</h4>
-                              <div class="space-y-3 text-sm">
-                                  ${renderCollapsibleContactList(
-                                    "Emails",
-                                    "envelope",
-                                    EMAILS,
-                                    "email"
-                                  )}
-                                  ${renderCollapsibleContactList(
-                                    "Phone Lines",
-                                    "phone",
-                                    PHONE_NUMBERS,
-                                    "phone"
-                                  )}
-                                  ${renderCollapsibleContactList(
-                                    "WhatsApp",
-                                    "whatsapp",
-                                    WHATSAPP_NUMBERS,
-                                    "whatsapp"
-                                  )}
-                                  <div class="flex items-center pt-2">
-                                      <i class="fas fa-map-marker-alt mr-3 text-sm"></i>
-                                      <span>Hossana, Ethiopia</span>
-                                  </div>
-                              </div>
-                          </div>
-                          <div class="col-span-2 md:col-span-2">
-                              <h4 class="text-xl font-bold text-amber-400 mb-4">Social Media Hub</h4>
-                              <div class="flex flex-wrap text-2xl">
-                                  ${renderSocialIcon(
-                                    "tiktok",
-                                    SOCIAL_LINKS.tiktok
-                                  )}
-                                  ${renderSocialIcon(
-                                    "facebook-f",
-                                    SOCIAL_LINKS.facebook
-                                  )}
-                                  ${renderSocialIcon(
-                                    "telegram-plane",
-                                    SOCIAL_LINKS.telegram
-                                  )}
-                                  ${renderSocialIcon(
-                                    "twitter",
-                                    SOCIAL_LINKS.twitter
-                                  )}
-                                  ${renderSocialIcon(
-                                    "instagram",
-                                    SOCIAL_LINKS.instagram
-                                  )}
-                                  ${renderSocialIcon(
-                                    "linkedin-in",
-                                    SOCIAL_LINKS.linkedin
-                                  )}
-                                  ${renderSocialIcon(
-                                    "youtube",
-                                    SOCIAL_LINKS.youtube
-                                  )}
-                              </div>
-                          </div>
-                      </div>
-                      <div class="text-center text-sm pt-4 border-t">
-                          &copy; ${new Date().getFullYear()} ቤት ለቤት ገበያ (Bet Le Bet Gebeya). All Rights Reserved.
-                      </div>
-                  </div>
-              </footer>
-          `;
+                <footer class="bg-emerald-900 text-gray-200 mt-12">
+                    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-8 border-b border-emerald-800 pb-8 mb-8">
+                            <div>
+                                <h4 class="text-xl font-bold text-amber-400 mb-4">Quick Links</h4>
+                                <ul class="space-y-2 text-sm">
+                                    <li><button onclick="window.app.navigate('Home')" class="hover:text-amber-400 transition">Home</button></li>
+                                    <li><button onclick="window.app.navigate('Category', { category: 'All' })" class="hover:text-amber-400 transition">Shop All</button></li>
+                                    <li><button onclick="window.app.navigate('About')" class="hover:text-amber-400 transition">Our Mission</button></li>
+                                    <li><button onclick="window.app.navigate('Contact')" class="hover:text-amber-400 transition">Support</button></li>
+                                </ul>
+                            </div>
+                            <div>
+                                <h4 class="text-xl font-bold text-amber-400 mb-4">Contact Hossana</h4>
+                                <div class="space-y-3 text-sm">
+                                    ${renderCollapsibleContactList(
+                                      "Emails",
+                                      "envelope",
+                                      EMAILS,
+                                      "email"
+                                    )}
+                                    ${renderCollapsibleContactList(
+                                      "Phone Lines",
+                                      "phone",
+                                      PHONE_NUMBERS,
+                                      "phone"
+                                    )}
+                                    ${renderCollapsibleContactList(
+                                      "WhatsApp",
+                                      "whatsapp",
+                                      WHATSAPP_NUMBERS,
+                                      "whatsapp"
+                                    )}
+                                    <div class="flex items-center pt-2">
+                                        <i class="fas fa-map-marker-alt mr-3 text-sm"></i>
+                                        <span>Hossana, Ethiopia</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-span-2 md:col-span-2">
+                                <h4 class="text-xl font-bold text-amber-400 mb-4">Social Media Hub</h4>
+                                <div class="flex flex-wrap text-2xl">
+                                    ${renderSocialIcon(
+                                      "tiktok",
+                                      SOCIAL_LINKS.tiktok
+                                    )}
+                                    ${renderSocialIcon(
+                                      "facebook-f",
+                                      SOCIAL_LINKS.facebook
+                                    )}
+                                    ${renderSocialIcon(
+                                      "telegram-plane",
+                                      SOCIAL_LINKS.telegram
+                                    )}
+                                    ${renderSocialIcon(
+                                      "twitter",
+                                      SOCIAL_LINKS.twitter
+                                    )}
+                                    ${renderSocialIcon(
+                                      "instagram",
+                                      SOCIAL_LINKS.instagram
+                                    )}
+                                    ${renderSocialIcon(
+                                      "linkedin-in",
+                                      SOCIAL_LINKS.linkedin
+                                    )}
+                                    ${renderSocialIcon(
+                                      "youtube",
+                                      SOCIAL_LINKS.youtube
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="text-center text-sm pt-4 border-t">
+                            &copy; ${new Date().getFullYear()} ቤት ለቤት ገበያ (Bet Le Bet Gebeya). All Rights Reserved.
+                        </div>
+                    </div>
+                </footer>
+              `;
       };
 
       const renderProductCard = (product) => {
@@ -984,7 +965,7 @@
                     </div>
                 </div>
             </div>
-        `;
+          `;
       };
 
       // --- Page Render Functions ---
@@ -1040,7 +1021,7 @@
                                       cat.name
                                     }</p>
                                 </button>
-                            `
+                              `
                           )
                           .join("")}
                     </div>
@@ -1054,7 +1035,7 @@
                     </div>
                 </div>
             </div>
-        `;
+          `;
       };
 
       const renderCategoryPage = () => {
@@ -1131,7 +1112,7 @@
                     </div>
                 </div>
             </div>
-        `;
+          `;
       };
 
       const renderProductDetailPage = () => {
@@ -1242,6 +1223,12 @@
                                       product.category
                                     }</span>
                                 </div>
+                                <div class="flex justify-between text-lg font-medium text-gray-700">
+                                    <span>Delivery Fee:</span>
+                                    <span class="text-emerald-700 font-bold">${formatPrice(
+                                      product.delivery_fee || 0
+                                    )}</span>
+                                </div>
                             </div>
                             <button onclick="window.app.addToCart('${
                               product.id
@@ -1275,66 +1262,66 @@
                     </div>
                 </div>
             </div>
-        `;
+          `;
       };
 
       const renderAboutPage = () => `
-          <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
-              <h1 class="text-5xl font-extrabold text-emerald-700 text-center">Our Mission: Bringing Gebeya Home</h1>
-              
-              <div class="bg-white p-8 rounded-xl shadow-2xl border-t-4 border-amber-400">
-                  <h2 class="text-3xl font-bold text-gray-800 mb-4 flex items-center"><i class="fas fa-seedling text-emerald-500 mr-3"></i>Farm-to-Door Philosophy</h2>
-                  <p class="text-lg text-gray-600 leading-relaxed">
-                      Bet Le Bet Gebeya (ቤት ለቤት ገበያ), meaning "Home to Home Market," was founded with a simple but powerful vision: to connect the rich agricultural bounty of Hossana, Ethiopia, directly to your kitchen. We cut out unnecessary middlemen to ensure you receive the freshest produce, grains, and local goods while supporting the local farmers who grow them.
-                  </p>
-              </div>
+        <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
+            <h1 class="text-5xl font-extrabold text-emerald-700 text-center">Our Mission: Bringing Gebeya Home</h1>
+            
+            <div class="bg-white p-8 rounded-xl shadow-2xl border-t-4 border-amber-400">
+                <h2 class="text-3xl font-bold text-gray-800 mb-4 flex items-center"><i class="fas fa-seedling text-emerald-500 mr-3"></i>Farm-to-Door Philosophy</h2>
+                <p class="text-lg text-gray-600 leading-relaxed">
+                    Bet Le Bet Gebeya (ቤት ለቤት ገበያ), meaning "Home to Home Market," was founded with a simple but powerful vision: to connect the rich agricultural bounty of Hossana, Ethiopia, directly to your kitchen. We cut out unnecessary middlemen to ensure you receive the freshest produce, grains, and local goods while supporting the local farmers who grow them.
+                </p>
+            </div>
 
-              <div class="grid md:grid-cols-2 gap-8">
-                  <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-emerald-500">
-                      <h3 class="text-2xl font-semibold text-gray-700 mb-3">Quality & Trust</h3>
-                      <p class="text-gray-600">
-                          Every product is hand-selected and verified for quality. From creamy avocados to premium Yirgacheffe coffee beans, we guarantee authentic, high-standard Ethiopian products.
-                      </p>
-                  </div>
-                  <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-emerald-500">
-                      <h3 class="text-2xl font-semibold text-gray-700 mb-3">Community First</h3>
-                      <p class="text-gray-600">
-                          We believe in sustainable local commerce. By shopping with us, you are directly investing in the economic growth of our community and empowering local farmers and producers.
-                      </p>
-                  </div>
-              </div>
-              
-              <div class="text-center pt-8 border-t">
-                  <h2 class="text-3xl font-bold text-emerald-800 mb-4">Ready to Taste the Difference?</h2>
-                  <button onclick="window.app.navigate('Category', { category: 'All' })" class="mt-4 bg-emerald-600 text-white font-bold py-3 px-8 rounded-full text-lg hover:bg-emerald-700 shadow-lg transition">
-                      Explore Our Products <i class="fas fa-shopping-basket ml-2"></i>
-                  </button>
-              </div>
-          </div>
+            <div class="grid md:grid-cols-2 gap-8">
+                <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-emerald-500">
+                    <h3 class="text-2xl font-semibold text-gray-700 mb-3">Quality & Trust</h3>
+                    <p class="text-gray-600">
+                        Every product is hand-selected and verified for quality. From creamy avocados to premium Yirgacheffe coffee beans, we guarantee authentic, high-standard Ethiopian products.
+                    </p>
+                </div>
+                <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-emerald-500">
+                    <h3 class="text-2xl font-semibold text-gray-700 mb-3">Community First</h3>
+                    <p class="text-gray-600">
+                        We believe in sustainable local commerce. By shopping with us, you are directly investing in the economic growth of our community and empowering local farmers and producers.
+                    </p>
+                </div>
+            </div>
+            
+            <div class="text-center pt-8 border-t">
+                <h2 class="text-3xl font-bold text-emerald-800 mb-4">Ready to Taste the Difference?</h2>
+                <button onclick="window.app.navigate('Category', { category: 'All' })" class="mt-4 bg-emerald-600 text-white font-bold py-3 px-8 rounded-full text-lg hover:bg-emerald-700 shadow-lg transition">
+                    Explore Our Products <i class="fas fa-shopping-basket ml-2"></i>
+                </button>
+            </div>
+        </div>
       `;
 
       const renderContactPage = () => `
-          <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-              <h1 class="text-5xl font-extrabold text-emerald-700 text-center mb-12">Get In Touch</h1>
-              
-              <div class="grid md:grid-cols-2 gap-10">
-                  <div class="bg-white p-8 rounded-xl shadow-2xl space-y-6">
-                      <h2 class="text-3xl font-bold text-gray-800 mb-4">Contact Information</h2>
-                      <div class="space-y-4 text-gray-600">
-                          <div class="flex items-center"><i class="fas fa-envelope text-amber-500 w-6"></i> <span>${EMAILS.join(
-                            ", "
-                          )}</span></div>
-                          <div class="flex items-center"><i class="fas fa-phone text-amber-500 w-6"></i> <span>${PHONE_NUMBERS.join(
-                            " / "
-                          )}</span></div>
-                          <div class="flex items-center"><i class="fab fa-whatsapp text-amber-500 w-6"></i> <span>+251 ${
-                            WHATSAPP_NUMBERS[0]
-                          }</span></div>
-                          <div class="flex items-center"><i class="fas fa-map-marker-alt text-amber-500 w-6"></i> <span>Hossana, SNNPR, Ethiopia</span></div>
-                      </div>
-                      <div class="pt-4 border-t">
-                          <h3 class="text-xl font-semibold text-gray-700 mb-2">Follow Us</h3>
-                          <div class="flex text-2xl">
+        <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+            <h1 class="text-5xl font-extrabold text-emerald-700 text-center mb-12">Get In Touch</h1>
+            
+            <div class="grid md:grid-cols-2 gap-10">
+                <div class="bg-white p-8 rounded-xl shadow-2xl space-y-6">
+                    <h2 class="text-3xl font-bold text-gray-800 mb-4">Contact Information</h2>
+                    <div class="space-y-4 text-gray-600">
+                        <div class="flex items-center"><i class="fas fa-envelope text-amber-500 w-6"></i> <span>${EMAILS.join(
+                          ", "
+                        )}</span></div>
+                        <div class="flex items-center"><i class="fas fa-phone text-amber-500 w-6"></i> <span>${PHONE_NUMBERS.join(
+                          " / "
+                        )}</span></div>
+                        <div class="flex items-center"><i class="fab fa-whatsapp text-amber-500 w-6"></i> <span>+251 ${
+                          WHATSAPP_NUMBERS[0]
+                        }</span></div>
+                        <div class="flex items-center"><i class="fas fa-map-marker-alt text-amber-500 w-6"></i> <span>Hossana, SNNPR, Ethiopia</span></div>
+                    </div>
+                    <div class="pt-4 border-t">
+                        <h3 class="text-xl font-semibold text-gray-700 mb-2">Follow Us</h3>
+                        <div class="flex text-2xl">
                             ${renderSocialIcon(
                               "facebook-f",
                               SOCIAL_LINKS.facebook
@@ -1347,138 +1334,141 @@
                               "instagram",
                               SOCIAL_LINKS.instagram
                             )}
-                          </div>
-                      </div>
-                  </div>
-                  
-                  <div class="bg-gray-50 p-8 rounded-xl shadow-xl">
-                      <h2 class="text-3xl font-bold text-emerald-700 mb-4">Send Us a Message</h2>
-                      <form onsubmit="window.app.handleContactSubmit(event)" class="space-y-4">
-                          <div>
-                              <label for="name" class="block text-sm font-medium text-gray-700">Name</label>
-                              <input type="text" id="name" name="name" required class="mt-1 w-full p-3 border border-gray-300 rounded-lg focus:ring-amber-500 focus:border-amber-500">
-                          </div>
-                          <div>
-                              <label for="email" class="block text-sm font-medium text-gray-700">Email</label>
-                              <input type="email" id="email" name="email" required class="mt-1 w-full p-3 border border-gray-300 rounded-lg focus:ring-amber-500 focus:border-amber-500">
-                          </div>
-                          <div>
-                              <label for="message" class="block text-sm font-medium text-gray-700">Message</label>
-                              <textarea id="message" name="message" rows="4" required class="mt-1 w-full p-3 border border-gray-300 rounded-lg focus:ring-amber-500 focus:border-amber-500"></textarea>
-                          </div>
-                          <button type="submit" class="w-full bg-emerald-700 text-white font-bold py-3 px-4 rounded-lg hover:bg-emerald-600 transition shadow-lg">
-                              Submit Inquiry
-                          </button>
-                      </form>
-                  </div>
-              </div>
-          </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="bg-gray-50 p-8 rounded-xl shadow-xl">
+                    <h2 class="text-3xl font-bold text-emerald-700 mb-4">Send Us a Message</h2>
+                    <form onsubmit="window.app.handleContactSubmit(event)" class="space-y-4">
+                        <div>
+                            <label for="name" class="block text-sm font-medium text-gray-700">Name</label>
+                            <input type="text" id="name" name="name" required class="mt-1 w-full p-3 border border-gray-300 rounded-lg focus:ring-amber-500 focus:border-amber-500">
+                        </div>
+                        <div>
+                            <label for="email" class="block text-sm font-medium text-gray-700">Email</label>
+                            <input type="email" id="email" name="email" required class="mt-1 w-full p-3 border border-gray-300 rounded-lg focus:ring-amber-500 focus:border-amber-500">
+                        </div>
+                        <div>
+                            <label for="message" class="block text-sm font-medium text-gray-700">Message</label>
+                            <textarea id="message" name="message" rows="4" required class="mt-1 w-full p-3 border border-gray-300 rounded-lg focus:ring-amber-500 focus:border-amber-500"></textarea>
+                        </div>
+                        <button type="submit" class="w-full bg-emerald-700 text-white font-bold py-3 px-4 rounded-lg hover:bg-emerald-600 transition shadow-lg">
+                            Submit Inquiry
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
       `;
 
       const renderCartPage = () => {
         const { cartItems } = state;
+        // MODIFIED: Calculate totals based on per-item delivery fees
         const subtotal = cartItems.reduce(
           (sum, item) => sum + item.price * item.quantity,
           0
         );
-        const deliveryFee = state.deliveryFee; // NEW: Use managed delivery fee
-        const total = subtotal + deliveryFee;
+        const totalDeliveryFee = cartItems.reduce(
+          (sum, item) => sum + (item.delivery_fee || 0) * item.quantity,
+          0
+        );
+        const total = subtotal + totalDeliveryFee;
 
         const cartListHtml = cartItems
           .map(
             (item) => `
-              <div class="flex items-center py-4 border-b last:border-b-0">
-                  <img src="${item.image_url}" alt="${
+            <div class="flex items-center py-4 border-b last:border-b-0">
+                <img src="${item.image_url}" alt="${
               item.name
             }" class="w-20 h-20 object-cover rounded-lg mr-4" onError="this.onerror=null;this.src='https://placehold.co/80x80/CCCCCC/333333?text=Img';">
-                  <div class="flex-grow">
-                      <h3 class="font-bold text-gray-800">${item.name}</h3>
-                      <p class="text-amber-500 font-semibold">${formatPrice(
-                        item.price
-                      )}</p>
-                  </div>
-                  <div class="flex items-center space-x-3 mx-4">
-                      <button onclick="window.app.updateCartItem('${
-                        item.id
-                      }', ${
+                <div class="flex-grow">
+                    <h3 class="font-bold text-gray-800">${item.name}</h3>
+                    <p class="text-amber-500 font-semibold">${formatPrice(
+                      item.price
+                    )}</p>
+                    <p class="text-xs text-gray-500">Delivery: ${formatPrice(
+                      item.delivery_fee || 0
+                    )}</p>
+                </div>
+                <div class="flex items-center space-x-3 mx-4">
+                    <button onclick="window.app.updateCartItem('${item.id}', ${
               item.quantity - 1
             })" class="w-8 h-8 rounded-full bg-gray-200 hover:bg-gray-300"><i class="fas fa-minus text-sm"></i></button>
-                      <span class="font-semibold w-6 text-center">${
-                        item.quantity
-                      }</span>
-                      <button onclick="window.app.updateCartItem('${
-                        item.id
-                      }', ${
+                    <span class="font-semibold w-6 text-center">${
+                      item.quantity
+                    }</span>
+                    <button onclick="window.app.updateCartItem('${item.id}', ${
               item.quantity + 1
             })" class="w-8 h-8 rounded-full bg-gray-200 hover:bg-gray-300"><i class="fas fa-plus text-sm"></i></button>
-                  </div>
-                  <div class="font-bold text-emerald-700 w-20 text-right">
-                      ${formatPrice(item.price * item.quantity)}
-                  </div>
-                  <button onclick="window.app.removeFromCart('${
-                    item.id
-                  }')" class="ml-4 text-red-500 hover:text-red-700 transition">
-                      <i class="fas fa-trash-alt"></i>
-                  </button>
-              </div>
+                </div>
+                <div class="font-bold text-emerald-700 w-20 text-right">
+                    ${formatPrice(item.price * item.quantity)}
+                </div>
+                <button onclick="window.app.removeFromCart('${
+                  item.id
+                }')" class="ml-4 text-red-500 hover:text-red-700 transition">
+                    <i class="fas fa-trash-alt"></i>
+                </button>
+            </div>
           `
           )
           .join("");
 
         return `
-              <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
-                  <h1 class="text-4xl font-extrabold text-emerald-700 mb-8">Your Shopping Basket</h1>
-                  
-                  <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                      <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-lg">
-                          ${
-                            cartItems.length > 0
-                              ? cartListHtml
-                              : `
-                              <div class="text-center p-10 text-gray-500">
-                                  <i class="fas fa-shopping-basket text-5xl mb-4 text-amber-400"></i>
-                                  <p class="text-xl font-semibold">Your cart is empty.</p>
-                                  <button onclick="window.app.navigate('Category', { category: 'All' })" class="mt-4 text-emerald-700 hover:text-amber-500 font-semibold">Start Shopping</button>
-                              </div>
-                            `
-                          }
-                      </div>
-                      
-                      <div class="lg:col-span-1 bg-gray-50 p-6 rounded-xl shadow-lg h-fit sticky top-24">
-                          <h2 class="text-2xl font-bold text-emerald-800 mb-4 border-b pb-2">Order Summary</h2>
-                          <div class="space-y-3">
-                              <div class="flex justify-between text-gray-600"><span>Subtotal:</span> <span>${formatPrice(
-                                subtotal
-                              )}</span></div>
-                              <div class="flex justify-between text-gray-600"><span>Delivery Fee:</span> <span>${formatPrice(
-                                deliveryFee
-                              )}</span></div>
-                              <div class="flex justify-between pt-3 border-t-2 border-amber-400">
-                                  <span class="text-xl font-bold text-gray-900">Total:</span>  
-                                  <span class="text-xl font-bold text-emerald-700">${formatPrice(
-                                    total
-                                  )}</span>
-                              </div>
-                          </div>
-                          
-                          <button 
-                              onclick="${
-                                cartItems.length > 0
-                                  ? "window.app.navigate('Checkout')"
-                                  : "window.app.showToast('Please add items to your cart first.', 'info')"
-                              } "
-                              class="mt-6 w-full py-3 rounded-lg text-white text-lg font-bold transition shadow-md ${
-                                cartItems.length > 0
-                                  ? "bg-amber-500 hover:bg-amber-600"
-                                  : "bg-gray-400 cursor-not-allowed"
-                              }"
-                              ${cartItems.length === 0 ? "disabled" : ""}
-                          >
-                              Proceed to Checkout
-                          </button>
-                      </div>
-                  </div>
-              </div>
+            <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+                <h1 class="text-4xl font-extrabold text-emerald-700 mb-8">Your Shopping Basket</h1>
+                
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-lg">
+                        ${
+                          cartItems.length > 0
+                            ? cartListHtml
+                            : `
+                            <div class="text-center p-10 text-gray-500">
+                                <i class="fas fa-shopping-basket text-5xl mb-4 text-amber-400"></i>
+                                <p class="text-xl font-semibold">Your cart is empty.</p>
+                                <button onclick="window.app.navigate('Category', { category: 'All' })" class="mt-4 text-emerald-700 hover:text-amber-500 font-semibold">Start Shopping</button>
+                            </div>
+                          `
+                        }
+                    </div>
+                    
+                    <div class="lg:col-span-1 bg-gray-50 p-6 rounded-xl shadow-lg h-fit sticky top-24">
+                        <h2 class="text-2xl font-bold text-emerald-800 mb-4 border-b pb-2">Order Summary</h2>
+                        <div class="space-y-3">
+                            <div class="flex justify-between text-gray-600"><span>Subtotal:</span> <span>${formatPrice(
+                              subtotal
+                            )}</span></div>
+                            <div class="flex justify-between text-gray-600"><span>Total Delivery:</span> <span>${formatPrice(
+                              totalDeliveryFee
+                            )}</span></div>
+                            <div class="flex justify-between pt-3 border-t-2 border-amber-400">
+                                <span class="text-xl font-bold text-gray-900">Total:</span> 
+                                <span class="text-xl font-bold text-emerald-700">${formatPrice(
+                                  total
+                                )}</span>
+                            </div>
+                        </div>
+                        
+                        <button 
+                            onclick="${
+                              cartItems.length > 0
+                                ? "window.app.navigate('Checkout')"
+                                : "window.app.showToast('Please add items to your cart first.', 'info')"
+                            } "
+                            class="mt-6 w-full py-3 rounded-lg text-white text-lg font-bold transition shadow-md ${
+                              cartItems.length > 0
+                                ? "bg-amber-500 hover:bg-amber-600"
+                                : "bg-gray-400 cursor-not-allowed"
+                            }"
+                            ${cartItems.length === 0 ? "disabled" : ""}
+                        >
+                            Proceed to Checkout
+                        </button>
+                    </div>
+                </div>
+            </div>
           `;
       };
 
@@ -1488,105 +1478,109 @@
           return renderRequiresSignIn("Checkout");
         if (cartItems.length === 0) return renderEmptyCheckout();
 
+        // MODIFIED: Calculate totals based on per-item delivery fees
         const subtotal = cartItems.reduce(
           (sum, item) => sum + item.price * item.quantity,
           0
         );
-        const deliveryFee = state.deliveryFee;
-        const total = subtotal + deliveryFee;
+        const totalDeliveryFee = cartItems.reduce(
+          (sum, item) => sum + (item.delivery_fee || 0) * item.quantity,
+          0
+        );
+        const total = subtotal + totalDeliveryFee;
 
         const summaryHtml = cartItems
           .map(
             (item) => `
-              <div class="flex justify-between text-sm text-gray-600">
-                  <span>${item.name} (${item.quantity})</span>
-                  <span>${formatPrice(item.price * item.quantity)}</span>
-              </div>
+            <div class="flex justify-between text-sm text-gray-600">
+                <span>${item.name} (${item.quantity})</span>
+                <span>${formatPrice(item.price * item.quantity)}</span>
+            </div>
           `
           )
           .join("");
 
         return `
-              <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
-                  <h1 class="text-4xl font-extrabold text-emerald-700 mb-8">Checkout</h1>
-                  
-                  <form onsubmit="window.app.handlePlaceOrder(event)" class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                      <div class="lg:col-span-2 bg-white p-8 rounded-xl shadow-lg space-y-6">
-                          <h2 class="text-2xl font-bold text-gray-800 border-b pb-3 mb-4">Delivery Details</h2>
-                          
-                          <div>
-                              <label for="email" class="block text-sm font-medium text-gray-700">Email Address</label>
-                              <input type="email" id="email" name="email" value="${
-                                user.email || ""
-                              }" required readonly class="mt-1 w-full p-3 border border-gray-300 rounded-lg bg-gray-100 cursor-not-allowed">
-                          </div>
-                          
-                          <div>
-                              <label for="phone" class="block text-sm font-medium text-gray-700">Phone Number (Required)</label>
-                              <input type="tel" id="phone" name="phone" value="${
-                                user.phone || ""
-                              }" required class="mt-1 w-full p-3 border border-gray-300 rounded-lg focus:ring-amber-500 focus:border-amber-500">
-                          </div>
+            <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+                <h1 class="text-4xl font-extrabold text-emerald-700 mb-8">Checkout</h1>
+                
+                <form onsubmit="window.app.handlePlaceOrder(event)" class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    <div class="lg:col-span-2 bg-white p-8 rounded-xl shadow-lg space-y-6">
+                        <h2 class="text-2xl font-bold text-gray-800 border-b pb-3 mb-4">Delivery Details</h2>
+                        
+                        <div>
+                            <label for="email" class="block text-sm font-medium text-gray-700">Email Address</label>
+                            <input type="email" id="email" name="email" value="${
+                              user.email || ""
+                            }" required readonly class="mt-1 w-full p-3 border border-gray-300 rounded-lg bg-gray-100 cursor-not-allowed">
+                        </div>
+                        
+                        <div>
+                            <label for="phone" class="block text-sm font-medium text-gray-700">Phone Number (Required)</label>
+                            <input type="tel" id="phone" name="phone" value="${
+                              user.phone || ""
+                            }" required class="mt-1 w-full p-3 border border-gray-300 rounded-lg focus:ring-amber-500 focus:border-amber-500">
+                        </div>
 
-                          <div>
-                              <label for="address" class="block text-sm font-medium text-gray-700">Delivery Address (Required)</label>
-                              <textarea id="address" name="address" rows="3" required class="mt-1 w-full p-3 border border-gray-300 rounded-lg focus:ring-amber-500 focus:border-amber-500">${
-                                user.address || ""
-                              }</textarea>
-                              <p class="text-xs text-gray-500 mt-1">Hossana City, Sub-City/Kebele, House Number/Landmark.</p>
-                          </div>
-                          
-                          <h2 class="text-2xl font-bold text-gray-800 border-b pb-3 mb-4 pt-4">Payment Method (COD Only)</h2>
-                          <div class="flex items-center bg-emerald-50 p-4 rounded-lg border border-emerald-300">
-                              <input type="radio" id="cod" name="payment_method" value="COD" checked class="h-4 w-4 text-emerald-600 border-gray-300 focus:ring-emerald-500">
-                              <label for="cod" class="ml-3 text-lg font-medium text-gray-700">Cash on Delivery (Pay when we arrive)</label>
-                          </div>
-                      </div>
-                      
-                      <div class="lg:col-span-1 bg-gray-50 p-6 rounded-xl shadow-lg h-fit sticky top-24">
-                          <h2 class="text-2xl font-bold text-amber-500 mb-4 border-b pb-2">Your Order</h2>
-                          <div class="space-y-3">
-                              ${summaryHtml}
-                              <div class="flex justify-between pt-2 border-t text-gray-700"><span>Delivery Fee:</span> <span>${formatPrice(
-                                deliveryFee
-                              )}</span></div>
-                              <div class="flex justify-between pt-3 border-t-2 border-emerald-700">
-                                  <span class="text-2xl font-bold text-gray-900">Final Total:</span>  
-                                  <span class="text-2xl font-bold text-amber-500">${formatPrice(
-                                    total
-                                  )}</span>
-                              </div>
-                          </div>
-                          
-                          <button type="submit" class="mt-6 w-full py-3 rounded-lg text-white text-lg font-bold transition shadow-lg bg-emerald-700 hover:bg-emerald-600">
-                              <i class="fas fa-truck mr-2"></i> Place Order (COD)
-                          </button>
-                      </div>
-                  </form>
-              </div>
+                        <div>
+                            <label for="address" class="block text-sm font-medium text-gray-700">Delivery Address (Required)</label>
+                            <textarea id="address" name="address" rows="3" required class="mt-1 w-full p-3 border border-gray-300 rounded-lg focus:ring-amber-500 focus:border-amber-500">${
+                              user.address || ""
+                            }</textarea>
+                            <p class="text-xs text-gray-500 mt-1">Hossana City, Sub-City/Kebele, House Number/Landmark.</p>
+                        </div>
+                        
+                        <h2 class="text-2xl font-bold text-gray-800 border-b pb-3 mb-4 pt-4">Payment Method (COD Only)</h2>
+                        <div class="flex items-center bg-emerald-50 p-4 rounded-lg border border-emerald-300">
+                            <input type="radio" id="cod" name="payment_method" value="COD" checked class="h-4 w-4 text-emerald-600 border-gray-300 focus:ring-emerald-500">
+                            <label for="cod" class="ml-3 text-lg font-medium text-gray-700">Cash on Delivery (Pay when we arrive)</label>
+                        </div>
+                    </div>
+                    
+                    <div class="lg:col-span-1 bg-gray-50 p-6 rounded-xl shadow-lg h-fit sticky top-24">
+                        <h2 class="text-2xl font-bold text-amber-500 mb-4 border-b pb-2">Your Order</h2>
+                        <div class="space-y-3">
+                            ${summaryHtml}
+                            <div class="flex justify-between pt-2 border-t text-gray-700"><span>Total Delivery:</span> <span>${formatPrice(
+                              totalDeliveryFee
+                            )}</span></div>
+                            <div class="flex justify-between pt-3 border-t-2 border-emerald-700">
+                                <span class="text-2xl font-bold text-gray-900">Final Total:</span> 
+                                <span class="text-2xl font-bold text-amber-500">${formatPrice(
+                                  total
+                                )}</span>
+                            </div>
+                        </div>
+                        
+                        <button type="submit" class="mt-6 w-full py-3 rounded-lg text-white text-lg font-bold transition shadow-lg bg-emerald-700 hover:bg-emerald-600">
+                            <i class="fas fa-truck mr-2"></i> Place Order (COD)
+                        </button>
+                    </div>
+                </form>
+            </div>
           `;
       };
 
       const renderEmptyCheckout = () => `
-          <div class="max-w-xl mx-auto text-center p-12 bg-white rounded-xl shadow-lg">
-              <i class="fas fa-shopping-basket text-6xl text-amber-400 mb-4"></i>
-              <h1 class="text-3xl font-bold text-gray-800 mb-2">Checkout is Empty</h1>
-              <p class="text-lg text-gray-600 mb-6">Please add some products to your cart before proceeding to checkout.</p>
-              <button onclick="window.app.navigate('Category', { category: 'All' })" class="bg-emerald-700 text-white font-bold py-2 px-6 rounded-full hover:bg-emerald-600 transition">
-                  Go to Shop
-              </button>
-          </div>
+        <div class="max-w-xl mx-auto text-center p-12 bg-white rounded-xl shadow-lg">
+            <i class="fas fa-shopping-basket text-6xl text-amber-400 mb-4"></i>
+            <h1 class="text-3xl font-bold text-gray-800 mb-2">Checkout is Empty</h1>
+            <p class="text-lg text-gray-600 mb-6">Please add some products to your cart before proceeding to checkout.</p>
+            <button onclick="window.app.navigate('Category', { category: 'All' })" class="bg-emerald-700 text-white font-bold py-2 px-6 rounded-full hover:bg-emerald-600 transition">
+                Go to Shop
+            </button>
+        </div>
       `;
 
       const renderRequiresSignIn = (pageName) => `
-          <div class="max-w-xl mx-auto text-center p-12 bg-white rounded-xl shadow-lg">
-              <i class="fas fa-lock text-6xl text-red-500 mb-4"></i>
-              <h1 class="text-3xl font-bold text-gray-800 mb-2">Access Denied</h1>
-              <p class="text-lg text-gray-600 mb-6">You must be signed in to view the ${pageName} page.</p>
-              <button onclick="window.app.openModal('login')" class="bg-amber-500 text-white font-bold py-2 px-6 rounded-full hover:bg-amber-600 transition">
-                  Sign In Now
-              </button>
-          </div>
+        <div class="max-w-xl mx-auto text-center p-12 bg-white rounded-xl shadow-lg">
+            <i class="fas fa-lock text-6xl text-red-500 mb-4"></i>
+            <h1 class="text-3xl font-bold text-gray-800 mb-2">Access Denied</h1>
+            <p class="text-lg text-gray-600 mb-6">You must be signed in to view the ${pageName} page.</p>
+            <button onclick="window.app.openModal('login')" class="bg-amber-500 text-white font-bold py-2 px-6 rounded-full hover:bg-amber-600 transition">
+                Sign In Now
+            </button>
+        </div>
       `;
 
       const renderOrderTrackingPage = () => {
@@ -1639,33 +1633,33 @@
               order.items.length
             })</button>
                 </div>
-            `;
+              `;
           })
           .join("");
 
         return `
-              <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-                  <h1 class="text-4xl font-extrabold text-emerald-700 mb-8">My Orders</h1>
-                  <p class="text-gray-600 mb-6">User ID: <span class="font-mono text-xs bg-gray-200 p-1 rounded">${
-                    user.id
-                  }</span></p>
+            <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+                <h1 class="text-4xl font-extrabold text-emerald-700 mb-8">My Orders</h1>
+                <p class="text-gray-600 mb-6">User ID: <span class="font-mono text-xs bg-gray-200 p-1 rounded">${
+                  user.id
+                }</span></p>
 
-                  <div class="space-y-6">
-                      ${
-                        userOrders.length > 0
-                          ? ordersHtml
-                          : `
-                          <div class="text-center p-10 bg-amber-50 rounded-xl">
-                              <i class="fas fa-box-open text-5xl text-amber-400 mb-4"></i>
-                              <p class="text-xl font-semibold text-gray-700">You haven't placed any orders yet.</p>
-                              <button onclick="window.app.navigate('Category', { category: 'All' })" class="mt-4 bg-emerald-700 text-white font-bold py-2 px-6 rounded-full hover:bg-emerald-600 transition">
-                                  Start Your First Order
-                              </button>
-                          </div>
-                        `
-                      }
-                  </div>
-              </div>
+                <div class="space-y-6">
+                    ${
+                      userOrders.length > 0
+                        ? ordersHtml
+                        : `
+                        <div class="text-center p-10 bg-amber-50 rounded-xl">
+                            <i class="fas fa-box-open text-5xl text-amber-400 mb-4"></i>
+                            <p class="text-xl font-semibold text-gray-700">You haven't placed any orders yet.</p>
+                            <button onclick="window.app.navigate('Category', { category: 'All' })" class="mt-4 bg-emerald-700 text-white font-bold py-2 px-6 rounded-full hover:bg-emerald-600 transition">
+                                Start Your First Order
+                            </button>
+                        </div>
+                      `
+                    }
+                </div>
+            </div>
           `;
       };
 
@@ -1677,13 +1671,13 @@
         return `<div class="space-y-3">${itemArray
           .map(
             (item) => `
-              <div class="flex justify-between text-sm border-b pb-1">
-                  <span>${item.name} x ${item.quantity}</span>
-                  <span class="font-semibold">${formatPrice(
-                    item.price * item.quantity
-                  )}</span>
-              </div>
-          `
+                <div class="flex justify-between text-sm border-b pb-1">
+                    <span>${item.name} x ${item.quantity}</span>
+                    <span class="font-semibold">${formatPrice(
+                      item.price * item.quantity
+                    )}</span>
+                </div>
+              `
           )
           .join("")}</div>`;
       };
@@ -1694,53 +1688,53 @@
           return renderRequiresSignIn("Profile");
 
         return `
-              <div class="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8">
-                  <h1 class="text-4xl font-extrabold text-emerald-700 text-center mb-8">My Profile</h1>
-                  
-                  <div class="bg-white p-8 rounded-xl shadow-2xl space-y-6">
-                      <div class="text-center">
-                          <i class="fas fa-user-circle text-6xl text-amber-500 mb-3"></i>
-                          <h2 class="text-2xl font-bold text-gray-800">${
-                            user.email
-                          }</h2>
-                          <span class="text-sm font-semibold px-3 py-1 rounded-full ${
-                            user.role === "admin"
-                              ? "bg-red-100 text-red-600"
-                              : "bg-emerald-100 text-emerald-600"
-                          }">${user.role.toUpperCase()}</span>
-                      </div>
-                      
-                      <div class="space-y-4 border-t pt-4">
-                          <div class="flex justify-between items-center py-2 border-b">
-                              <span class="font-medium text-gray-600">User ID</span>
-                              <span class="font-mono text-xs bg-gray-100 p-1 rounded break-all">${
-                                user.id
-                              }</span>
-                          </div>
-                          <div class="flex justify-between items-center py-2 border-b">
-                              <span class="font-medium text-gray-600">Contact Phone</span>
-                              <span class="text-gray-800">${
-                                user.phone || "N/A"
-                              }</span>
-                          </div>
-                          <div class="py-2">
-                              <span class="font-medium text-gray-600 block mb-1">Delivery Address</span>
-                              <span class="text-gray-800 block p-3 bg-gray-50 rounded-lg">${
-                                user.address || "N/A"
-                              }</span>
-                          </div>
-                      </div>
-                      
-                      <div class="flex justify-between pt-4 border-t">
-                          <button onclick="window.app.navigate('OrderTracking')" class="bg-amber-400 text-emerald-900 font-bold py-2 px-6 rounded-lg hover:bg-amber-300 transition shadow-md">
-                              <i class="fas fa-receipt mr-2"></i> View Orders
-                          </button>
-                          <button onclick="window.app.handleSignOut()" class="bg-gray-200 text-gray-700 font-bold py-2 px-6 rounded-lg hover:bg-gray-300 transition">
-                              <i class="fas fa-sign-out-alt mr-2"></i> Sign Out
-                          </button>
-                      </div>
-                  </div>
-              </div>
+            <div class="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8">
+                <h1 class="text-4xl font-extrabold text-emerald-700 text-center mb-8">My Profile</h1>
+                
+                <div class="bg-white p-8 rounded-xl shadow-2xl space-y-6">
+                    <div class="text-center">
+                        <i class="fas fa-user-circle text-6xl text-amber-500 mb-3"></i>
+                        <h2 class="text-2xl font-bold text-gray-800">${
+                          user.email
+                        }</h2>
+                        <span class="text-sm font-semibold px-3 py-1 rounded-full ${
+                          user.role === "admin"
+                            ? "bg-red-100 text-red-600"
+                            : "bg-emerald-100 text-emerald-600"
+                        }">${user.role.toUpperCase()}</span>
+                    </div>
+                    
+                    <div class="space-y-4 border-t pt-4">
+                        <div class="flex justify-between items-center py-2 border-b">
+                            <span class="font-medium text-gray-600">User ID</span>
+                            <span class="font-mono text-xs bg-gray-100 p-1 rounded break-all">${
+                              user.id
+                            }</span>
+                        </div>
+                        <div class="flex justify-between items-center py-2 border-b">
+                            <span class="font-medium text-gray-600">Contact Phone</span>
+                            <span class="text-gray-800">${
+                              user.phone || "N/A"
+                            }</span>
+                        </div>
+                        <div class="py-2">
+                            <span class="font-medium text-gray-600 block mb-1">Delivery Address</span>
+                            <span class="text-gray-800 block p-3 bg-gray-50 rounded-lg">${
+                              user.address || "N/A"
+                            }</span>
+                        </div>
+                    </div>
+                    
+                    <div class="flex justify-between pt-4 border-t">
+                        <button onclick="window.app.navigate('OrderTracking')" class="bg-amber-400 text-emerald-900 font-bold py-2 px-6 rounded-lg hover:bg-amber-300 transition shadow-md">
+                            <i class="fas fa-receipt mr-2"></i> View Orders
+                        </button>
+                        <button onclick="window.app.handleSignOut()" class="bg-gray-200 text-gray-700 font-bold py-2 px-6 rounded-lg hover:bg-gray-300 transition">
+                            <i class="fas fa-sign-out-alt mr-2"></i> Sign Out
+                        </button>
+                    </div>
+                </div>
+            </div>
           `;
       };
 
@@ -1793,7 +1787,7 @@
                         </button>
                     </td>
                 </tr>
-            `;
+              `;
           })
           .join("");
 
@@ -1814,7 +1808,7 @@
                     <tbody>${reviewsHtml}</tbody>
                 </table>
             </div>
-        `;
+          `;
       };
 
       const renderMessagesTab = () => {
@@ -1870,7 +1864,7 @@
                         </button>
                     </td>
                 </tr>
-            `;
+              `;
           })
           .join("");
 
@@ -1890,19 +1884,12 @@
                     <tbody>${messagesHtml}</tbody>
                 </table>
             </div>
-        `;
+          `;
       };
 
       const renderAdminDashboard = () => {
-        const {
-          user,
-          products,
-          allOrders,
-          allUsers,
-          allMessages,
-          adminTab,
-          deliveryFee,
-        } = state;
+        const { user, products, allOrders, allUsers, allMessages, adminTab } =
+          state;
 
         if (user?.role !== "admin") {
           return `<div class="text-center p-12 max-w-xl mx-auto bg-red-50 rounded-xl shadow-lg">
@@ -1929,6 +1916,9 @@
                     <td class="px-6 py-4 font-semibold text-emerald-700">${formatPrice(
                       p.price
                     )}</td>
+                    <td class="px-6 py-4 font-semibold text-blue-700">${formatPrice(
+                      p.delivery_fee
+                    )}</td>
                     <td class="px-6 py-4 ${
                       p.stock_quantity < 10
                         ? "text-red-600 font-bold"
@@ -1946,7 +1936,7 @@
                         }')" class="text-red-600 hover:text-red-800"><i class="fas fa-trash-alt"></i></button>
                     </td>
                 </tr>
-            `
+              `
             )
             .join("");
 
@@ -1955,19 +1945,6 @@
                     <button onclick="window.app.openModal('product_form', null)" class="bg-amber-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-amber-600 transition shadow-md">
                         <i class="fas fa-plus-circle mr-2"></i> Add New Product
                     </button>
-                    
-                    <div class="bg-blue-50 p-4 rounded-xl shadow border border-blue-200">
-                        <h3 class="text-lg font-bold text-blue-800 mb-2">Delivery Fee Management</h3>
-                        <form onsubmit="window.app.updateDeliveryFee(event)" class="flex space-x-3 items-end">
-                            <div class="flex-grow">
-                                <label for="deliveryFee" class="block text-sm font-medium text-gray-700">Current Fee: ${formatPrice(
-                                  deliveryFee
-                                )}</label>
-                                <input type="number" id="deliveryFee" name="deliveryFee" value="${deliveryFee}" step="0.01" required class="mt-1 w-full p-2 border rounded-lg">
-                            </div>
-                            <button type="submit" class="bg-blue-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-700 transition">Update Fee</button>
-                        </form>
-                    </div>
 
                     <div class="overflow-x-auto bg-white rounded-xl shadow-lg">
                         <table class="min-w-full text-left text-sm font-light">
@@ -1977,7 +1954,7 @@
                                     <th scope="col" class="px-6 py-4">Name</th>
                                     <th scope="col" class="px-6 py-4">Category</th>
                                     <th scope="col" class="px-6 py-4">Price</th>
-                                    <th scope="col" class="px-6 py-4">Stock</th>
+                                    <th scope="col" class="px-6 py-4">Delivery</th> <th scope="col" class="px-6 py-4">Stock</th>
                                     <th scope="col" class="px-6 py-4">Actions</th>
                                 </tr>
                             </thead>
@@ -1985,7 +1962,7 @@
                         </table>
                     </div>
                 </div>
-            `;
+              `;
         };
 
         const renderOrdersTab = () => {
@@ -1998,43 +1975,85 @@
                   : order.status === "Cancelled"
                   ? "bg-red-500"
                   : "bg-yellow-500";
+
+              // MODIFIED: Create full order details for modal
+              const dateString = new Date(
+                order.createdAt.seconds * 1000
+              ).toLocaleString();
+              const itemsHtml = order.items
+                .map(
+                  (item) =>
+                    `<li>${item.name} (x${item.quantity}) - ${formatPrice(
+                      item.price * item.quantity
+                    )}</li>`
+                )
+                .join("");
+
+              const fullOrderBody = `
+                  <div class='text-left space-y-2'>
+                      <p><strong>Order ID:</strong> ${order.id.substring(
+                        0,
+                        8
+                      )}...</p>
+                      <p><strong>Date:</strong> ${dateString}</p>
+                      <p><strong>Customer:</strong> ${order.userEmail}</p>
+                      <p><strong>Phone:</strong> ${
+                        order.contactPhone || "N/A"
+                      }</p>
+                      <p><strong>Address:</strong> ${
+                        order.shippingAddress || "N/A"
+                      }</p>
+                      <p><strong>Total:</strong> ${formatPrice(
+                        order.totalAmount
+                      )}</p>
+                      <hr class='my-2'>
+                      <p><strong>Items:</strong></p>
+                      <ul class='list-disc list-inside text-sm'>
+                          ${itemsHtml}
+                      </ul>
+                  </div>
+                `
+                .replace(/'/g, "\\'")
+                .replace(/\n/g, ""); // Escape for onclick
+
               return `
-                    <tr class="border-b hover:bg-gray-50">
-                        <td class="px-6 py-4 font-medium text-gray-900">${order.id.substring(
-                          0,
-                          8
-                        )}...</td>
-                        <td class="px-6 py-4">${order.userEmail}</td>
-                        <td class="px-6 py-4">${new Date(
-                          order.createdAt.seconds * 1000
-                        ).toLocaleDateString()}</td>
-                        <td class="px-6 py-4 font-semibold text-emerald-700">${formatPrice(
-                          order.totalAmount
-                        )}</td>
-                        <td class="px-6 py-4"><span class="text-white px-3 py-1 text-xs font-bold rounded-full ${statusClass}">${
+                  <tr class="border-b hover:bg-gray-50">
+                      <td class="px-6 py-4 font-medium text-gray-900">${order.id.substring(
+                        0,
+                        8
+                      )}...</td>
+                      <td class="px-6 py-4">${order.userEmail}</td>
+                      <td class="px-6 py-4">${order.contactPhone || "N/A"}</td>
+                      <td class="px-6 py-4 max-w-[200px] truncate" title="${
+                        order.shippingAddress || "N/A"
+                      }">${order.shippingAddress || "N/A"}</td>
+                      <td class="px-6 py-4 font-semibold text-emerald-700">${formatPrice(
+                        order.totalAmount
+                      )}</td>
+                      <td class="px-6 py-4"><span class="text-white px-3 py-1 text-xs font-bold rounded-full ${statusClass}">${
                 order.status
               }</span></td>
-                        <td class="px-6 py-4">
-                            <button onclick="window.app.openModal('order_detail', ${JSON.stringify(
-                              order.items
-                            ).replace(
-                              /"/g,
-                              "&quot;"
-                            )})" class="text-blue-600 hover:text-blue-800"><i class="fas fa-eye"></i></button>
-                            <select onchange="window.app.updateOrderStatus('${
-                              order.id
-                            }', this.value)" class="ml-2 border rounded p-1 text-sm">
-                                <option value="${
-                                  order.status
-                                }" selected disabled>${order.status}</option>
-                                <option value="Pending">Pending</option>
-                                <option value="Processing">Processing</option>
-                                <option value="Shipped">Shipped</option>
-                                <option value="Delivered">Delivered</option>
-                                <option value="Cancelled">Cancelled</option>
-                            </select>
-                        </td>
-                    </tr>
+                      <td class="px-6 py-4 whitespace-nowrap">
+                          <button onclick="window.app.openModal('message', {
+                              title: 'Order Details',
+                              body: '${fullOrderBody}',
+                              confirmAction: false
+                          })" class="text-blue-600 hover:text-blue-800"><i class="fas fa-eye"></i></button>
+                          
+                          <select onchange="window.app.updateOrderStatus('${
+                            order.id
+                          }', this.value)" class="ml-2 border rounded p-1 text-sm">
+                              <option value="${
+                                order.status
+                              }" selected disabled>${order.status}</option>
+                              <option value="Pending">Pending</option>
+                              <option value="Processing">Processing</option>
+                              <option value="Shipped">Shipped</option>
+                              <option value="Delivered">Delivered</option>
+                              <option value="Cancelled">Cancelled</option>
+                          </select>
+                      </td>
+                  </tr>
                 `;
             })
             .join("");
@@ -2045,9 +2064,8 @@
                         <thead class="border-b bg-gray-100 font-medium">
                             <tr>
                                 <th scope="col" class="px-6 py-4">Order ID</th>
-                                <th scope="col" class="px-6 py-4">Customer Email</th>
-                                <th scope="col" class="px-6 py-4">Date</th>
-                                <th scope="col" class="px-6 py-4">Total</th>
+                                <th scope="col" class="px-6 py-4">Email</th>
+                                <th scope="col" class="px-6 py-4">Contact</th> <th scope="col" class="px-6 py-4">Address</th> <th scope="col" classs="px-6 py-4">Total</th>
                                 <th scope="col" class="px-6 py-4">Status</th>
                                 <th scope="col" class="px-6 py-4">Actions</th>
                             </tr>
@@ -2055,7 +2073,7 @@
                         <tbody>${ordersHtml}</tbody>
                     </table>
                 </div>
-            `;
+              `;
         };
 
         const renderUsersTab = () => {
@@ -2073,7 +2091,7 @@
                     <td class="px-6 py-4">${u.phone || "N/A"}</td>
                     <td class="px-6 py-4">${u.address ? "Yes" : "No"}</td>
                 </tr>
-            `
+              `
             )
             .join("");
 
@@ -2092,7 +2110,7 @@
                         <tbody>${usersHtml}</tbody>
                     </table>
                 </div>
-            `;
+              `;
         };
 
         const renderContent = () => {
@@ -2174,7 +2192,7 @@
                     ${renderContent()}
                 </div>
             </div>
-        `;
+          `;
       };
 
       // --- Modal Rendering Functions ---
@@ -2189,32 +2207,32 @@
         const switchType = isLogin ? "register" : "login";
 
         return `
-              <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md mx-4">
-                  <h2 class="text-3xl font-bold text-emerald-700 mb-6 text-center">${title}</h2>
-                  ${
-                    message
-                      ? `<div class="bg-yellow-100 text-yellow-800 p-3 rounded-lg mb-4 text-sm">${message}</div>`
-                      : ""
-                  }
-                  <form onsubmit="window.app.handleAuthSubmit(event)" data-type="${
-                    isLogin ? "login" : "register"
-                  }" class="space-y-4">
-                      <div>
-                          <label for="auth-email" class="block text-sm font-medium text-gray-700">Email</label>
-                          <input type="email" id="auth-email" name="email" required class="mt-1 w-full p-3 border border-gray-300 rounded-lg focus:ring-amber-500 focus:border-amber-500" placeholder="user@example.com">
-                      </div>
-                      <div>
-                          <label for="auth-password" class="block text-sm font-medium text-gray-700">Password</label>
-                          <input type="password" id="auth-password" name="password" required class="mt-1 w-full p-3 border border-gray-300 rounded-lg focus:ring-amber-500 focus:border-amber-500" placeholder="••••••••">
-                      </div>
-                      <button type="submit" class="w-full bg-amber-500 text-white font-bold py-3 rounded-lg hover:bg-amber-600 transition shadow-lg">
-                          ${title}
-                      </button>
-                  </form>
-                  <button onclick="window.app.openModal('${switchType}')" class="mt-4 w-full text-sm text-emerald-600 hover:text-amber-500 transition">
-                      ${switchText}
-                  </button>
-              </div>
+            <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md mx-4">
+                <h2 class="text-3xl font-bold text-emerald-700 mb-6 text-center">${title}</h2>
+                ${
+                  message
+                    ? `<div class="bg-yellow-100 text-yellow-800 p-3 rounded-lg mb-4 text-sm">${message}</div>`
+                    : ""
+                }
+                <form onsubmit="window.app.handleAuthSubmit(event)" data-type="${
+                  isLogin ? "login" : "register"
+                }" class="space-y-4">
+                    <div>
+                        <label for="auth-email" class="block text-sm font-medium text-gray-700">Email</label>
+                        <input type="email" id="auth-email" name="email" required class="mt-1 w-full p-3 border border-gray-300 rounded-lg focus:ring-amber-500 focus:border-amber-500" placeholder="user@example.com">
+                    </div>
+                    <div>
+                        <label for="auth-password" class="block text-sm font-medium text-gray-700">Password</label>
+                        <input type="password" id="auth-password" name="password" required class="mt-1 w-full p-3 border border-gray-300 rounded-lg focus:ring-amber-500 focus:border-amber-500" placeholder="••••••••">
+                    </div>
+                    <button type="submit" class="w-full bg-amber-500 text-white font-bold py-3 rounded-lg hover:bg-amber-600 transition shadow-lg">
+                        ${title}
+                    </button>
+                </form>
+                <button onclick="window.app.openModal('${switchType}')" class="mt-4 w-full text-sm text-emerald-600 hover:text-amber-500 transition">
+                    ${switchText}
+                </button>
+            </div>
           `;
       };
 
@@ -2252,66 +2270,72 @@
           .join("");
 
         return `
-              <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-lg mx-4">
-                  <h2 class="text-3xl font-bold text-emerald-700 mb-6 border-b pb-2">${title}</h2>
-                  <form onsubmit="window.app.handleSaveProduct(event)" class="space-y-4">
-                      <input type="hidden" name="productId" value="${
-                        product.id || ""
-                      }">
-                      
-                      <div>
-                          <label class="block text-sm font-medium text-gray-700">Product Name</label>
-                          <input type="text" name="name" value="${
-                            product.name || ""
-                          }" required class="mt-1 w-full p-3 border rounded-lg">
-                      </div>
-                      
-                      <div class="grid grid-cols-2 gap-4">
-                          <div>
-                              <label class="block text-sm font-medium text-gray-700">Price (ETB)</label>
-                              <input type="number" name="price" step="0.01" value="${
-                                product.price || ""
-                              }" required class="mt-1 w-full p-3 border rounded-lg">
-                          </div>
-                          <div>
-                              <label class="block text-sm font-medium text-gray-700">Stock Quantity</label>
-                              <input type="number" name="stock_quantity" value="${
-                                product.stock_quantity || 0
-                              }" required class="mt-1 w-full p-3 border rounded-lg">
-                          </div>
-                      </div>
-                      
-                      <div>
-                          <label class="block text-sm font-medium text-gray-700">Category</label>
-                          <select name="category" required class="mt-1 w-full p-3 border rounded-lg">
-                              ${categoryOptions}
-                          </select>
-                      </div>
-                      
-                      <div>
-                          <label class="block text-sm font-medium text-gray-700">Image URL (Optional)</label>
-                          <input type="url" name="image_url" value="${
-                            product.image_url || ""
-                          }" class="mt-1 w-full p-3 border rounded-lg">
-                      </div>
+            <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-lg mx-4">
+                <h2 class="text-3xl font-bold text-emerald-700 mb-6 border-b pb-2">${title}</h2>
+                <form onsubmit="window.app.handleSaveProduct(event)" class="space-y-4">
+                    <input type="hidden" name="productId" value="${
+                      product.id || ""
+                    }">
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Product Name</label>
+                        <input type="text" name="name" value="${
+                          product.name || ""
+                        }" required class="mt-1 w-full p-3 border rounded-lg">
+                    </div>
+                    
+                    <div class="grid grid-cols-3 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Price (ETB)</label>
+                            <input type="number" name="price" step="0.01" value="${
+                              product.price || ""
+                            }" required class="mt-1 w-full p-3 border rounded-lg">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Stock Qty</label>
+                            <input type="number" name="stock_quantity" value="${
+                              product.stock_quantity || 0
+                            }" required class="mt-1 w-full p-3 border rounded-lg">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Delivery Fee</label>
+                            <input type="number" name="delivery_fee" step="0.01" value="${
+                              product.delivery_fee || 0
+                            }" required class="mt-1 w-full p-3 border rounded-lg">
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Category</label>
+                        <select name="category" required class="mt-1 w-full p-3 border rounded-lg">
+                            ${categoryOptions}
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Image URL (Optional)</label>
+                        <input type="url" name="image_url" value="${
+                          product.image_url || ""
+                        }" class="mt-1 w-full p-3 border rounded-lg">
+                    </div>
 
-                      <div>
-                          <label class="block text-sm font-medium text-gray-700">Description</label>
-                          <textarea name="description" rows="3" class="mt-1 w-full p-3 border rounded-lg">${
-                            product.description || ""
-                          }</textarea>
-                      </div>
-                      
-                      <div class="flex justify-end space-x-3 pt-4">
-                          <button type="button" onclick="window.app.closeModal()" class="px-4 py-2 bg-gray-200 text-gray-700 font-bold rounded-lg hover:bg-gray-300 transition">
-                              Cancel
-                          </button>
-                          <button type="submit" class="px-4 py-2 bg-emerald-700 text-white font-bold rounded-lg hover:bg-emerald-600 transition shadow-md">
-                              ${submitText}
-                          </button>
-                      </div>
-                  </form>
-              </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Description</label>
+                        <textarea name="description" rows="3" class="mt-1 w-full p-3 border rounded-lg">${
+                          product.description || ""
+                        }</textarea>
+                    </div>
+                    
+                    <div class="flex justify-end space-x-3 pt-4">
+                        <button type="button" onclick="window.app.closeModal()" class="px-4 py-2 bg-gray-200 text-gray-700 font-bold rounded-lg hover:bg-gray-300 transition">
+                            Cancel
+                        </button>
+                        <button type="submit" class="px-4 py-2 bg-emerald-700 text-white font-bold rounded-lg hover:bg-emerald-600 transition shadow-md">
+                            ${submitText}
+                        </button>
+                    </div>
+                </form>
+            </div>
           `;
       };
 
@@ -2324,13 +2348,13 @@
           let html = `<div class="flex space-x-1 text-2xl mb-4">`;
           for (let i = 5; i >= 1; i--) {
             html += `
-              <label for="rating-${i}" class="cursor-pointer text-gray-300 hover:text-amber-400 transition-colors">
-                <input type="radio" id="rating-${i}" name="rating" value="${i}" class="hidden" ${
+                <label for="rating-${i}" class="cursor-pointer text-gray-300 hover:text-amber-400 transition-colors">
+                  <input type="radio" id="rating-${i}" name="rating" value="${i}" class="hidden" ${
               i === 5 ? "checked" : ""
             }>
-                <i class="fas fa-star"></i>
-              </label>
-            `;
+                  <i class="fas fa-star"></i>
+                </label>
+              `;
           }
           html += `</div>`;
           return html;
@@ -2370,7 +2394,7 @@
                     </div>
                 </form>
             </div>
-        `;
+          `;
       };
 
       // *** CORRECTED renderMessageModal FIX (Handles Action ID) ***
@@ -2384,7 +2408,7 @@
           : "";
 
         return `
-            <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-sm mx-4 text-center">
+            <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-lg mx-4 text-center">
                 <h2 class="text-2xl font-bold text-emerald-700 mb-4">${title}</h2>
                 <div class="text-gray-600 mb-6 text-left">${body}</div>
                 
@@ -2398,12 +2422,12 @@
                         <button onclick="${executableString}" class="px-4 py-2 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 transition shadow-md">
                             Confirm
                         </button>
-                    `
+                      `
                         : ""
                     }
                 </div>
             </div>
-        `;
+          `;
       };
       // *** END CORRECTED renderMessageModal FIX ***
 
@@ -2428,7 +2452,7 @@
                     </button>
                 </div>
             </div>
-        `;
+          `;
       };
 
       const renderModal = () => {
@@ -2457,43 +2481,36 @@
         }
 
         return `
-              <div class="fixed inset-0 z-[60] bg-gray-900 bg-opacity-70 flex items-center justify-center modal-enter-active" onclick="if(event.target === this) window.app.closeModal()">
-                  ${modalContentHtml}
-              </div>
+            <div class="fixed inset-0 z-[60] bg-gray-900 bg-opacity-70 flex items-center justify-center modal-enter-active" onclick="if(event.target === this) window.app.closeModal()">
+                ${modalContentHtml}
+            </div>
           `;
       };
 
       // --- Admin Specific Firestore Actions ---
 
+      // MODIFIED: This function is now simpler and correct.
       const updateOrderStatus = async (orderId, newStatus) => {
         if (state.user?.role !== "admin" || !state.db) {
           return showToast("Permission denied.", "error");
         }
 
         try {
-          // 1. Update order in public collection (for admin view)
+          // 1. Update order in public collection (the ONLY collection)
           const publicOrderRef = doc(state.db, PUBLIC_ORDERS_PATH, orderId);
           await updateDoc(publicOrderRef, { status: newStatus });
 
-          // 2. Find the user ID from the order to update their personal order record
-          const orderSnapshot = await getDoc(publicOrderRef);
-          const userId = orderSnapshot.data()?.userId;
-
-          if (userId) {
-            const userOrderRef = doc(
-              state.db,
-              USER_ORDERS_COLLECTION_PATH(userId),
-              orderId
-            );
-            await updateDoc(userOrderRef, { status: newStatus });
-          }
+          // MODIFIED: REMOVED the second write that was causing the error.
 
           showToast(
             `Order ${orderId.substring(0, 8)} status updated to ${newStatus}`,
             "success"
           );
         } catch (e) {
-          showToast("Failed to update order status.", "error");
+          showToast(
+            "Failed to update order status. Check permissions/console.",
+            "error"
+          );
           console.error("Order Status Update Error:", e);
         }
       };
@@ -2575,22 +2592,21 @@
         updateCartItem,
         removeFromCart,
         handleAuthSubmit,
-        handleSaveProduct, // Working
-        handleDeleteProduct, // Working FIX
-        executePendingAction, // NEW FIX
+        handleSaveProduct,
+        handleDeleteProduct,
+        executePendingAction,
         setAdminTab,
         setSearchTerm,
         setPriceRange,
         handlePlaceOrder,
         showToast,
-        updateOrderStatus, // Working
+        updateOrderStatus, // MODIFIED
         renderOrderItemsDetail,
         handleContactSubmit,
         updateMessageStatus,
-        handleAddReview, // NEW
-        updateReviewStatus, // NEW
-        updateDeliveryFee, // NEW
-        _pendingActions: {}, // NEW: Storage for actions waiting for modal confirmation
+        handleAddReview,
+        updateReviewStatus,
+        _pendingActions: {},
       };
 
       // --- Firebase Initialization and Listeners ---
@@ -2619,13 +2635,6 @@
           setState({ db, auth });
 
           const adminEmails = [ADMIN_EMAIL];
-
-          // --- Settings Listener (NEW) ---
-          onSnapshot(doc(db, PUBLIC_SETTINGS_PATH, "general"), (docSnap) => {
-            if (docSnap.exists()) {
-              setState({ deliveryFee: docSnap.data().deliveryFee || 100.0 });
-            }
-          });
 
           // --- Auth State Listener ---
           onAuthStateChanged(auth, async (currentUser) => {
@@ -2684,9 +2693,15 @@
                 (error) => console.error("Cart Listener Error:", error)
               );
 
-              // User Orders Listener
+              // MODIFIED: User Orders Listener
+              // Now queries the public collection instead of reading a private one
+              const userOrdersQuery = query(
+                collection(db, PUBLIC_ORDERS_PATH),
+                where("userId", "==", userData.id)
+              );
+
               onSnapshot(
-                collection(db, USER_ORDERS_COLLECTION_PATH(userData.id)),
+                userOrdersQuery,
                 (snapshot) => {
                   const fetchedOrders = snapshot.docs.map((d) => ({
                     id: d.id,
@@ -2702,7 +2717,7 @@
 
             // Setup Admin Listeners (only if user might be admin)
             if (userData.id && userData.role === "admin") {
-              // Admin All Orders Listener
+              // Admin All Orders Listener (remains the same)
               onSnapshot(
                 collection(db, PUBLIC_ORDERS_PATH),
                 (snapshot) => {
@@ -2755,12 +2770,15 @@
                 (error) => console.error("Admin Reviews Listener Error:", error)
               );
             } else {
-              setState({
-                allOrders: [],
-                allUsers: [],
-                allMessages: [],
-                allReviews: [],
-              });
+              // Clear admin data if user is not admin
+              if (state.allOrders.length > 0) {
+                setState({
+                  allOrders: [],
+                  allUsers: [],
+                  allMessages: [],
+                  allReviews: [],
+                });
+              }
             }
           });
 
